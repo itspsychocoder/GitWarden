@@ -81,7 +81,7 @@ class Tray:
         self.app_id, self.title = app_id, title
         self.icon_dir = icon_dir
         self.on_activate = on_activate
-        self.icon, self.label, self.tooltip, self.status = "gitwarden-ok-symbolic", "", title, "Active"
+        self.icon, self.label, self.tooltip, self.status = "gitwarden-ok", "", title, "Active"
         self.items = []          # list of dicts, ids are index+1 (0 is the root)
         self.revision = 1
         self.bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)

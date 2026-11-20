@@ -249,7 +249,7 @@ class Controller:
         """(icon, headline, detail) for the icon, menu and window."""
         c = self.counts()
         if self.checking:
-            return "gitwarden-busy-symbolic", "Checking…", self.progress
+            return "gitwarden-busy", "Checking…", self.progress
         if c["pc_danger"]:
             return ("gitwarden-alert", f"Signs of malware on this PC ({c['pc_danger']})",
                     "Something here keeps malware running. Review it in GitWarden.")
@@ -261,15 +261,15 @@ class Controller:
             return ("gitwarden-alert", f"Malware on {c['branches']} GitHub branch{'es' if c['branches'] != 1 else ''}",
                     f"{c['danger']} dangerous file{'s' if c['danger'] != 1 else ''}. Don't pull these branches.")
         if self.token_problem:
-            return "gitwarden-off-symbolic", "GitHub not connected", self.token_problem
+            return "gitwarden-off", "GitHub not connected", self.token_problem
         if self.state.get("last_error"):
-            return "gitwarden-off-symbolic", "Last check failed", self.state["last_error"]
+            return "gitwarden-off", "Last check failed", self.state["last_error"]
         if self.settings.get("paused"):
-            return "gitwarden-paused-symbolic", "Watching paused", "Turn it back on from the menu."
+            return "gitwarden-paused", "Watching paused", "Turn it back on from the menu."
         if not self.state.get("last_check") and not self.local.get("last_check"):
-            return "gitwarden-busy-symbolic", "Not checked yet", "The first check starts in a moment."
+            return "gitwarden-busy", "Not checked yet", "The first check starts in a moment."
         extra = f" · {c['review']} file{'s' if c['review'] != 1 else ''} worth a look" if c["review"] else ""
-        return "gitwarden-ok-symbolic", "All clear", f"No malware found{extra}"
+        return "gitwarden-ok", "All clear", f"No malware found{extra}"
 
     # ---------------------------------------------------------------- UI sync
     def refresh(self):
@@ -376,8 +376,6 @@ class Window(Adw.ApplicationWindow):
         row = Adw.ActionRow(title=head, subtitle=detail)
         img = Gtk.Image.new_from_file(os.path.join(STATUS_ICONS, icon + ".svg"))
         img.set_pixel_size(32)
-        if icon.endswith("-symbolic"):
-            img.add_css_class("dim-label")
         row.add_prefix(img)
         row.add_css_class("property")
         g.add(row)
@@ -829,7 +827,9 @@ class App(Adw.Application):
 
     def do_startup(self):
         Adw.Application.do_startup(self)
-        Gtk.IconTheme.get_for_display(Gdk.Display.get_default()).add_search_path(ICON_DIR)
+        theme = Gtk.IconTheme.get_for_display(Gdk.Display.get_default())
+        theme.add_search_path(ICON_DIR)
+        Gtk.Window.set_default_icon_name(config.APP_ID)  # the dock/taskbar icon, even before GNOME finds the installed one
         self.hold()  # keep running in the top bar with no window open
         protect.refresh()  # keep the git hooks pointing at this copy of GitWarden
         self.ctl = Controller(self)

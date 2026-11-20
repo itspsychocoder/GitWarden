@@ -25,6 +25,8 @@ fi
 mkdir -p "$(dirname "$BIN")" "$APPS" "$ICONS"
 ln -sf "$HERE/bin/gitwarden" "$BIN"
 cp "$HERE/gitwarden/icons/hicolor/scalable/apps/$APP_ID.svg" "$ICONS/"
+touch "$(dirname "$(dirname "$ICONS")")"  # tell GNOME the icon folder changed, so the dock picks up the new icon
+command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database -q "$APPS" 2>/dev/null || true
 cat > "$APPS/$APP_ID.desktop" <<DESKTOP
 [Desktop Entry]
 Type=Application
