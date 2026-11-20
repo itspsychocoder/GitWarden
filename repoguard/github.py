@@ -7,6 +7,7 @@ import base64
 import json
 import os
 import re
+import tarfile
 import time
 import urllib.error
 import urllib.parse
@@ -19,6 +20,8 @@ API = os.environ.get("REPOGUARD_GITHUB_API", "https://api.github.com")
 BLOB_BUDGET = 1500        # max file downloads per check; the rest continue next time
 MIN_RATE_LEFT = 200       # stop early to leave API headroom for you and other tools
 MAX_CACHE = 300_000
+TARBALL_MIN_FILES = 15        # this many uncached files in a branch: download one archive instead of each file
+TARBALL_MAX_BYTES = 300_000_000
 
 
 class GitHubError(Exception):
@@ -87,6 +90,49 @@ class GitHub:
             link = headers.get("Link") or ""
         return 200, items, new_etag
 
+    def tarball(self, repo, ref, want, max_file):
+        """Download the repo at `ref` as one archive (1 API call) and return {path: bytes} for paths in `want`.
+        GitHub answers with a redirect to its download server carrying a short-lived URL token, so the redirect
+        is followed by hand *without* our Authorization header."""
+        url = f"{self.api}/repos/{repo}/tarball/{ref}"
+        req = urllib.request.Request(url)
+        req.add_header("Authorization", "Bearer " + self.token)
+        req.add_header("Accept", "application/vnd.github+json")
+        req.add_header("User-Agent", "RepoGuard-Linux")
+        self.calls += 1
+        try:
+            resp = _NO_REDIRECT.open(req, timeout=60)
+        except urllib.error.HTTPError as e:
+            with e:
+                self._rate(e.headers)
+                if e.code not in (301, 302, 303, 307, 308):
+                    raise GitHubError(e.code, str(e.reason)) from None
+                loc = urllib.parse.urljoin(url, e.headers.get("Location", ""))
+            host = urllib.parse.urlparse(loc).hostname or ""
+            if not (host == "github.com" or host.endswith(".github.com")
+                    or host == urllib.parse.urlparse(self.api).hostname):
+                raise GitHubError(0, f"unexpected archive location: {host}") from None
+            try:
+                resp = urllib.request.urlopen(urllib.request.Request(loc, headers={"User-Agent": "RepoGuard-Linux"}),
+                                              timeout=120)
+            except (urllib.error.URLError, OSError) as e2:
+                raise GitHubError(0, f"network error: {e2}") from None
+        except (urllib.error.URLError, OSError) as e:
+            raise GitHubError(0, f"network error: {e}") from None
+        out = {}
+        with resp:
+            try:
+                with tarfile.open(fileobj=_Capped(resp, TARBALL_MAX_BYTES), mode="r|gz") as tf:
+                    for m in tf:
+                        if not m.isfile() or m.size > max_file:
+                            continue
+                        path = m.name.split("/", 1)[1] if "/" in m.name else ""
+                        if path in want:
+                            out[path] = tf.extractfile(m).read()
+            except (tarfile.TarError, OSError, EOFError, _TooBig):
+                pass  # partial archive: whatever is missing gets downloaded file by file
+        return out
+
     def user(self):
         return self.request("GET", "/user")[1]
 
@@ -95,6 +141,32 @@ class GitHub:
         if data.get("encoding") == "base64":
             return base64.b64decode(data["content"])
         return (data.get("content") or "").encode()
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *a, **k):
+        return None  # surface the redirect as an HTTPError so we can follow it without the token
+
+
+_NO_REDIRECT = urllib.request.build_opener(_NoRedirect)
+
+
+class _TooBig(Exception):
+    pass
+
+
+class _Capped:
+    """File wrapper that stops reading after `cap` bytes (so a huge repo can't fill memory or disk)."""
+
+    def __init__(self, f, cap):
+        self.f, self.left = f, cap
+
+    def read(self, n=-1):
+        data = self.f.read(n if n is not None and n >= 0 else 1 << 20)
+        self.left -= len(data)
+        if self.left < 0:
+            raise _TooBig()
+        return data
 
 
 # ---------------------------------------------------------------- state
@@ -121,12 +193,14 @@ def save_state(s):
     config.save_json(state_path(), s)
 
 
-def finding_ids(findings):
+def finding_ids(findings, danger_only=False):
     """Stable ids for every hit, to tell new alerts from ones already shown."""
     out = set()
     for key, files in findings.items():
         for f in files:
             for h in f["hits"]:
+                if danger_only and h[1] != "danger":
+                    continue
                 out.add(f"{key}|{f['path']}|{f['blob']}|{h[0]}")
     return out
 
@@ -134,11 +208,14 @@ def finding_ids(findings):
 # ---------------------------------------------------------------- watcher
 
 class Watcher:
-    def __init__(self, gh, state, detector=None, budget=BLOB_BUDGET, progress=None):
+    def __init__(self, gh, state, detector=None, budget=BLOB_BUDGET, progress=None, checkpoint=None):
         self.gh, self.state = gh, state
         self.det = detector or Detector()
         self.budget = budget
         self.progress = progress or (lambda msg: None)
+        self.checkpoint = checkpoint or (lambda: None)
+        self.prefetched = {}
+        self.archives = 0
 
     def repos(self):
         """Repos you can push to (not archived). Uses an ETag so an unchanged list costs no rate limit."""
@@ -159,6 +236,8 @@ class Watcher:
             return [Hit.from_list(x) for x in cached]
         data = None
         if self.det.wants_content(path) and (entry.get("size") or 0) <= self.det.max_bytes:
+            data = self.prefetched.pop(path, None)
+        if data is None and self.det.wants_content(path) and (entry.get("size") or 0) <= self.det.max_bytes:
             if self.budget <= 0 or (self.gh.remaining is not None and self.gh.remaining < MIN_RATE_LEFT):
                 raise _OutOfBudget()
             self.budget -= 1
@@ -170,17 +249,29 @@ class Watcher:
     def scan_branch(self, repo, branch, sha):
         """Scan the whole tree at this commit. Returns the list of infected files."""
         _, tree, _ = self.gh.request("GET", f"/repos/{repo}/git/trees/{sha}?recursive=1")
+        entries = [e for e in tree.get("tree", []) if e.get("type") == "blob"
+                   and not any(part in self.det.skip_dirs for part in e["path"].split("/")[:-1])]
+        need = {e["path"] for e in entries
+                if f"{e['sha']}|{e['path']}" not in self.state["blob_verdicts"]
+                and self.det.wants_content(e["path"]) and (e.get("size") or 0) <= self.det.max_bytes}
+        self.prefetched = {}
+        if len(need) >= TARBALL_MIN_FILES:
+            self.progress(f"Downloading {repo} · {branch} ({len(need)} files in one archive)")
+            try:
+                self.prefetched = self.gh.tarball(repo, sha, need, self.det.max_bytes)
+                self.archives += 1
+            except GitHubError as e:
+                if e.status == 0 and "network" in str(e):
+                    raise
+                self.prefetched = {}  # fall back to downloading file by file
         files = []
-        for e in tree.get("tree", []):
-            if e.get("type") != "blob":
-                continue
+        for e in entries:
             path = e["path"]
-            if any(part in self.det.skip_dirs for part in path.split("/")[:-1]):
-                continue
             hits = self._verdict(repo, path, e)
             if hits:
                 files.append({"path": path, "blob": e["sha"], "hits": [h.as_list() for h in hits],
                               "severity": worst(hits)})
+        self.prefetched = {}
         return files, bool(tree.get("truncated"))
 
     def run(self):
@@ -222,6 +313,7 @@ class Watcher:
                 else:
                     st["findings"].pop(key, None)
                 st["heads"][key] = sha
+            self.checkpoint()
             if incomplete:
                 break
         if not incomplete:  # forget branches that were deleted
@@ -233,7 +325,8 @@ class Watcher:
         st["last_error"] = None
         new = sorted(finding_ids(st["findings"]) - before)
         return {"repos": len(repos), "branches_scanned": scanned, "incomplete": incomplete, "errors": errors,
-                "new": new, "api_calls": self.gh.calls, "rate_remaining": self.gh.remaining}
+                "new": new, "api_calls": self.gh.calls, "rate_remaining": self.gh.remaining,
+                "archives": self.archives}
 
 
 class _OutOfBudget(Exception):

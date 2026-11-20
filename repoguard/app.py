@@ -110,7 +110,8 @@ class Controller:
             err = result = None
             try:
                 gh = github.GitHub(token)
-                watcher = github.Watcher(gh, work_state, progress=lambda m: GLib.idle_add(self._set_progress, m))
+                watcher = github.Watcher(gh, work_state, progress=lambda m: GLib.idle_add(self._set_progress, m),
+                                         checkpoint=lambda: github.save_state(work_state))
                 result = watcher.run()
             except github.GitHubError as e:
                 err = ("GitHub rejected the token. Paste a new one in Settings." if e.status == 401 else str(e))
@@ -131,7 +132,7 @@ class Controller:
         if result and result.get("errors"):
             new_state["last_warnings"] = result["errors"][:20]
         self.state = new_state
-        current = github.finding_ids(self.state["findings"])
+        current = github.finding_ids(self.state["findings"], danger_only=True)  # review notes never pop up
         fresh = sorted(current - set(self.state.get("alerted", [])))
         self.state["alerted"] = sorted(current)
         github.save_state(self.state)
@@ -183,7 +184,7 @@ class Controller:
             return "repoguard-paused-symbolic", "Watching paused", "Turn it back on from the menu."
         if not self.state.get("last_check"):
             return "repoguard-busy-symbolic", "Not checked yet", "The first check starts in a moment."
-        extra = f" · {c['review']} file{'s' if c['review'] != 1 else ''} to review" if c["review"] else ""
+        extra = f" · {c['review']} file{'s' if c['review'] != 1 else ''} worth a look" if c["review"] else ""
         return "repoguard-ok-symbolic", "All clear", f"No malware found{extra}"
 
     # ---------------------------------------------------------------- UI sync
@@ -263,6 +264,8 @@ class Window(Adw.ApplicationWindow):
     # ---------------------------------------------------------------- overview
     def update(self):
         ctl = self.ctl
+        if hasattr(self, "conn_row"):
+            self._update_conn()
         self.check_btn.set_sensitive(not ctl.checking)
         self.spinner.set_visible(ctl.checking)
         for g in self._groups:
@@ -288,38 +291,41 @@ class Window(Adw.ApplicationWindow):
                                           "RepoGuard needs read access to your repos to watch new commits."))
 
         findings = ctl.state["findings"]
-        tg = self._group("Threats on GitHub", "Files in your repos that match this malware. Nothing here has been run.")
-        if not findings:
+        danger = {k: [f for f in v if f["severity"] == "danger"] for k, v in findings.items()}
+        danger = {k: v for k, v in danger.items() if v}
+        review = [(k, f) for k, v in sorted(findings.items()) for f in v if f["severity"] != "danger"]
+
+        tg = self._group("Threats on GitHub", "Files that match this malware. Nothing here has been run.")
+        if not danger:
             tg.add(Adw.ActionRow(title="No malware found", subtitle="Every checked branch is clean."))
-        for key in sorted(findings, key=lambda k: (all(f["severity"] != "danger" for f in findings[k]), k)):
-            files = findings[key]
-            danger = sum(1 for f in files if f["severity"] == "danger")
+        for key in sorted(danger):
+            files = danger[key]
             exp = Adw.ExpanderRow(title=GLib.markup_escape_text(key.replace(":", " · ")),
-                                  subtitle=(f"{danger} dangerous file{'s' if danger != 1 else ''}" if danger
-                                            else f"{len(files)} file{'s' if len(files) != 1 else ''} to review"))
-            exp.add_prefix(Gtk.Image.new_from_icon_name("dialog-warning-symbolic" if danger else "dialog-question-symbolic"))
-            if danger:
-                exp.add_css_class("error")
-                fb = Gtk.Button(label="Fix…", valign=Gtk.Align.CENTER, tooltip_text="Remove the malware on GitHub")
-                fb.add_css_class("suggested-action")
-                fb.connect("clicked", lambda *_, k=key: self.open_fix(k))
-                exp.add_suffix(fb)
+                                  subtitle=f"{len(files)} dangerous file{'s' if len(files) != 1 else ''}")
+            exp.add_prefix(Gtk.Image.new_from_icon_name("dialog-warning-symbolic"))
+            exp.add_css_class("error")
+            fb = Gtk.Button(label="Fix…", valign=Gtk.Align.CENTER, tooltip_text="Remove the malware on GitHub")
+            fb.add_css_class("suggested-action")
+            fb.connect("clicked", lambda *_, k=key: self.open_fix(k))
+            exp.add_suffix(fb)
             btn = Gtk.Button(icon_name="web-browser-symbolic", tooltip_text="Open branch on GitHub", valign=Gtk.Align.CENTER)
             btn.add_css_class("flat")
             btn.connect("clicked", lambda *_, k=key: open_url(github.branch_url(k)))
             exp.add_suffix(btn)
-            for f in sorted(files, key=lambda f: (f["severity"] != "danger", f["path"])):
-                r = Adw.ActionRow(title=GLib.markup_escape_text(f["path"]),
-                                  subtitle=GLib.markup_escape_text(" · ".join(dict.fromkeys(h[2] for h in f["hits"]))))
-                r.add_prefix(Gtk.Image.new_from_icon_name(
-                    "dialog-error-symbolic" if f["severity"] == "danger" else "dialog-information-symbolic"))
-                ob = Gtk.Button(icon_name="adw-external-link-symbolic", tooltip_text="Open file on GitHub",
-                                valign=Gtk.Align.CENTER)
-                ob.add_css_class("flat")
-                ob.connect("clicked", lambda *_, k=key, p=f["path"]: open_url(github.branch_url(k, p)))
-                r.add_suffix(ob)
-                exp.add_row(r)
+            for f in sorted(files, key=lambda f: f["path"]):
+                exp.add_row(self._file_row(key, f, "dialog-error-symbolic"))
             tg.add(exp)
+
+        if review:
+            rg = self._group("Worth a look (not malware)",
+                             "Normal files that can run code: GitHub workflows, .npmrc, npm install scripts, "
+                             "VS Code tasks. Check them only if you didn't add them yourself.")
+            exp = Adw.ExpanderRow(title=f"{len(review)} file{'s' if len(review) != 1 else ''} that can run code",
+                                  subtitle=f"in {len({k for k, _ in review})} branches")
+            exp.add_prefix(Gtk.Image.new_from_icon_name("dialog-information-symbolic"))
+            for key, f in review:
+                exp.add_row(self._file_row(key, f, "dialog-information-symbolic", show_branch=True))
+            rg.add(exp)
 
         warnings = ctl.state.get("last_warnings") or []
         if warnings:
@@ -336,6 +342,18 @@ class Window(Adw.ApplicationWindow):
                                    subtitle="private" if r.get("private") else "public")
                 exp.add_row(rr)
             rg.add(exp)
+
+    def _file_row(self, key, f, icon, show_branch=False):
+        labels = " · ".join(dict.fromkeys(h[2] for h in f["hits"]))
+        sub = f"{key.replace(':', ' · ')} — {labels}" if show_branch else labels
+        r = Adw.ActionRow(title=GLib.markup_escape_text(f["path"]), subtitle=GLib.markup_escape_text(sub))
+        r.add_prefix(Gtk.Image.new_from_icon_name(icon))
+        ob = Gtk.Button(icon_name="adw-external-link-symbolic", tooltip_text="Open file on GitHub",
+                        valign=Gtk.Align.CENTER)
+        ob.add_css_class("flat")
+        ob.connect("clicked", lambda *_, k=key, p=f["path"]: open_url(github.branch_url(k, p)))
+        r.add_suffix(ob)
+        return r
 
     def open_fix(self, key):
         from .fixdialog import FixDialog
@@ -403,19 +421,41 @@ class Window(Adw.ApplicationWindow):
         self.settings_page.add(g)
 
         gg = Adw.PreferencesGroup(title="GitHub access")
-        token, src = config.github_token()
-        gg.add(Adw.ActionRow(title="Connected" if token else "Not connected",
-                             subtitle=f"Using {src}" if token else src))
+        self.conn_row = Adw.ActionRow()
+        gg.add(self.conn_row)
         self._token_group(gg)
-        forget = Adw.ButtonRow(title="Forget saved token")
-        forget.add_css_class("destructive-action")
-
-        def on_forget(*_):
-            config.forget_token()
-            self.toast("Saved token removed.")
-        forget.connect("activated", on_forget)
-        gg.add(forget)
         self.settings_page.add(gg)
+
+        fg = Adw.PreferencesGroup()
+        forget = Adw.ButtonRow(title="Forget saved token…")
+        forget.add_css_class("destructive-action")
+        forget.connect("activated", lambda *_: self._confirm_forget())
+        fg.add(forget)
+        self.settings_page.add(fg)
+        self._update_conn()
+
+    def _update_conn(self):
+        token, src = config.github_token()
+        self.conn_row.set_title("Connected" if token else "Not connected")
+        self.conn_row.set_subtitle(GLib.markup_escape_text(f"Using {src}" if token else src))
+
+    def _confirm_forget(self):
+        d = Adw.AlertDialog(heading="Forget the saved GitHub token?",
+                            body="RepoGuard stops watching GitHub until you paste a token again.")
+        d.add_response("cancel", "Cancel")
+        d.add_response("forget", "Forget token")
+        d.set_response_appearance("forget", Adw.ResponseAppearance.DESTRUCTIVE)
+        d.set_default_response("cancel")
+        d.set_close_response("cancel")
+
+        def done(_d, response):
+            if response == "forget":
+                config.forget_token()
+                self.toast("Saved token removed.")
+                self.ctl.token_problem = config.github_token()[1]
+                self.ctl.refresh()
+        d.connect("response", done)
+        d.present(self)
 
 
 # ====================================================================== application

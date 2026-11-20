@@ -66,13 +66,25 @@ def token_path():
     return os.path.join(config_dir(), "github-token")
 
 
+def log(msg):
+    """Append one line to ~/.local/state/repoguard/repoguard.log (never logs token values)."""
+    import time
+    try:
+        with open(os.path.join(state_dir(), "repoguard.log"), "a", encoding="utf8") as fh:
+            fh.write(time.strftime("%Y-%m-%d %H:%M:%S ") + msg + "\n")
+    except OSError:
+        pass
+
+
 def save_token(token):
     _write_private(token_path(), token.strip() + "\n")
+    log("watch token saved")
 
 
-def forget_token():
+def forget_token(reason="Forget saved token pressed"):
     try:
         os.remove(token_path())
+        log(f"watch token removed ({reason})")
     except FileNotFoundError:
         pass
 

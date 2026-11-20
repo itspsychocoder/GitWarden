@@ -76,6 +76,36 @@ class WatchTest(unittest.TestCase):
         self.assertFalse(res["incomplete"])
         self.assertIn("me/app:main", state["findings"])
 
+    def test_big_first_scan_uses_one_archive_without_leaking_token(self):
+        repo = self.mock.add(self.root, "me/big")
+        for i in range(40):
+            with open(os.path.join(repo.work, "src", f"m{i}.js"), "w") as fh:
+                fh.write(f"export const m{i} = {i};\n")
+        infect(repo.work)
+        repo.commit("lots of files + forged")
+        state = github.load_state()
+        res = self.run_check(state)
+        self.assertEqual(res["archives"], 1)
+        self.assertLessEqual(self.mock.blob_calls(), 2, "files come from the archive, not one request each")
+        self.assertIn("postcss.config.mjs", {f["path"] for f in state["findings"]["me/big:main"]})
+        self.assertEqual(self.mock.codeload_auth, [None], "token must not be sent to the download server")
+
+    def test_checkpoint_called_per_repo(self):
+        self.mock.add(self.root, "me/a")
+        self.mock.add(self.root, "me/b")
+        calls = []
+        github.Watcher(github.GitHub("test-token", api=self.mock.url), github.load_state(),
+                       checkpoint=lambda: calls.append(1)).run()
+        self.assertEqual(len(calls), 2)
+
+    def test_review_notes_are_not_alerts(self):
+        findings = {"me/a:main": [{"path": ".github/workflows/ci.yml", "blob": "b1", "severity": "review",
+                                   "hits": [["autorun_location", "review", "File that can run code automatically"]]},
+                                  {"path": "init", "blob": "b2", "severity": "danger",
+                                   "hits": [["init_file", "review", "x"], ["known_code", "danger", "y"]]}]}
+        self.assertEqual(github.finding_ids(findings, danger_only=True), {"me/a:main|init|b2|known_code"})
+        self.assertEqual(len(github.finding_ids(findings)), 3)
+
     def test_state_round_trip(self):
         self.mock.add(self.root, "me/app")
         state = github.load_state()

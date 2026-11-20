@@ -77,6 +77,7 @@ class MockGitHub:
         self.remotes = {}
         self.calls = []
         self.protected = {}   # "owner/repo:branch" -> "ruleset" | "protection" | "allowed"
+        self.codeload_auth = []  # Authorization headers seen by the download server (must stay empty)
         mock = self
 
         class H(BaseHTTPRequestHandler):
@@ -110,6 +111,16 @@ class MockGitHub:
 
             def do_GET(self):
                 u, parts, r = self.route()
+                if parts[0] == "_codeload":  # the download server: no token expected (or allowed)
+                    mock.codeload_auth.append(self.headers.get("Authorization"))
+                    rr = mock.remotes.get(f"{parts[1]}/{parts[2]}")
+                    data = git(rr.bare, "archive", "--format=tar.gz", f"--prefix={parts[1]}-{parts[2]}-x/", parts[3])
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/x-gzip")
+                    self.send_header("Content-Length", str(len(data)))
+                    self.end_headers()
+                    self.wfile.write(data)
+                    return
                 if self.token() not in READ_TOKENS:
                     return self.send(401, {"message": "Bad credentials"})
                 if u.path == "/user/repos":
@@ -145,6 +156,12 @@ class MockGitHub:
                     branch = "/".join(parts[5:])
                     rules = [{"type": "non_fast_forward"}] if mock.protected.get(key(branch)) == "ruleset" else []
                     return self.send(200, rules)
+                if parts[3] == "tarball":
+                    self.send_response(302)
+                    self.send_header("Location", f"{mock.url}/_codeload/{parts[1]}/{parts[2]}/{parts[4]}?token=tmp")
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
                 if parts[3:5] == ["git", "trees"]:
                     out = git(r.bare, "ls-tree", "-r", "-l", parts[5]).decode()
                     tree = []
