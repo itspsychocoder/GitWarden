@@ -17,7 +17,7 @@ try:
 except (ValueError, ImportError):
     Notify = None
 
-from . import autostart, config, github, protect  # noqa: E402
+from . import autostart, config, github, local, protect  # noqa: E402
 from .tray import Tray  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -38,6 +38,16 @@ def ago(ts):
     return time.strftime("%d %b %H:%M", time.localtime(ts))
 
 
+def WHERE(where):
+    """Human words for where a local finding is."""
+    if where == "disk":
+        return "file on disk"
+    if where == "git":
+        return "git settings"
+    kind, _, name = where.partition(":")
+    return f"in branch {name}" if kind == "branch" else f"in remote branch {name}"
+
+
 def open_url(url):
     try:
         Gio.AppInfo.launch_default_for_uri(url, None)
@@ -55,6 +65,10 @@ class Controller:
         self.settings = config.load_settings()
         self.state = github.load_state()
         self.state.setdefault("alerted", [])
+        self.local = local.load_state()
+        self.local.setdefault("alerted", [])
+        self.settings.setdefault("folders", local.default_folders())
+        self.settings.setdefault("local_ignore", [])
         self.checking = False
         self.progress = ""
         self.token_problem = None
@@ -96,30 +110,34 @@ class Controller:
 
     # ---------------------------------------------------------------- checks
     def check_now(self):
+        """One check of this computer's code folders (always) and of GitHub (when connected)."""
         if self.checking:
             return
         token, why = config.github_token()
-        if not token:
-            self.token_problem = why
-            self.refresh()
-            return
-        self.token_problem = None
+        self.token_problem = None if token else why
         self.checking, self.progress = True, "Starting…"
         self.refresh()
-        work_state = copy.deepcopy(self.state)
+        gh_state = copy.deepcopy(self.state)
+        local_state = copy.deepcopy(self.local)
+        folders = list(self.settings.get("folders") or [])
+        progress = lambda m: GLib.idle_add(self._set_progress, m)  # noqa: E731
 
         def work():
-            err = result = None
+            gh_err = result = local_err = None
             try:
-                gh = github.GitHub(token)
-                watcher = github.Watcher(gh, work_state, progress=lambda m: GLib.idle_add(self._set_progress, m),
-                                         checkpoint=lambda: github.save_state(work_state))
-                result = watcher.run()
-            except github.GitHubError as e:
-                err = ("GitHub rejected the token. Paste a new one in Settings." if e.status == 401 else str(e))
-            except Exception as e:  # keep the app alive whatever happens
-                err = f"Unexpected error: {e!r}"
-            GLib.idle_add(self._done, work_state, result, err)
+                local.Scanner(local_state, folders, progress=progress).run()
+            except Exception as e:
+                local_err = f"Couldn't check this computer: {e!r}"
+            if token:
+                try:
+                    watcher = github.Watcher(github.GitHub(token), gh_state, progress=progress,
+                                             checkpoint=lambda: github.save_state(gh_state))
+                    result = watcher.run()
+                except github.GitHubError as e:
+                    gh_err = ("GitHub rejected the token. Paste a new one in Settings." if e.status == 401 else str(e))
+                except Exception as e:  # keep the app alive whatever happens
+                    gh_err = f"Unexpected error: {e!r}"
+            GLib.idle_add(self._done, gh_state if token else None, result, gh_err, local_state, local_err)
 
         threading.Thread(target=work, name="repoguard-check", daemon=True).start()
 
@@ -128,55 +146,92 @@ class Controller:
         self.refresh()
         return False
 
-    def _done(self, new_state, result, err):
+    def _done(self, gh_state, result, err, local_state, local_err):
         self.checking, self.progress = False, ""
-        new_state["last_error"] = err
-        if result and result.get("errors"):
-            new_state["last_warnings"] = result["errors"][:20]
-        self.state = new_state
-        current = github.finding_ids(self.state["findings"], danger_only=True)  # review notes never pop up
-        fresh = sorted(current - set(self.state.get("alerted", [])))
-        self.state["alerted"] = sorted(current)
-        github.save_state(self.state)
+        if gh_state is not None:
+            gh_state["last_error"] = err
+            if result and result.get("errors"):
+                gh_state["last_warnings"] = result["errors"][:20]
+            self.state = gh_state
+            current = github.finding_ids(self.state["findings"], danger_only=True)  # review notes never pop up
+            fresh = sorted(current - set(self.state.get("alerted", [])))
+            self.state["alerted"] = sorted(current)
+            github.save_state(self.state)
+            if fresh:
+                self.alert(fresh)
+        local_state["last_error"] = local_err
+        self.local = local_state
+        current = local.finding_ids(self.local_findings())
+        fresh = sorted(current - set(self.local.get("alerted", [])))
+        self.local["alerted"] = sorted(current)
+        local.save_state(self.local)
         if fresh:
-            self.alert(fresh)
+            self.alert_local(fresh)
         self.refresh()
         return False
 
+    def local_findings(self, ignored=False):
+        """Findings on this computer, without (or only) the folders you chose to ignore."""
+        ign = set(self.settings.get("local_ignore", []))
+        return {k: v for k, v in self.local.get("findings", {}).items() if (k in ign) == ignored}
+
+    def ignore_folder(self, root, on=True):
+        ign = set(self.settings.get("local_ignore", []))
+        (ign.add if on else ign.discard)(root)
+        self.settings["local_ignore"] = sorted(ign)
+        self.save_settings()
+        self.refresh()
+
     # ---------------------------------------------------------------- alerts
+    def _notify(self, title, body):
+        if not self.settings.get("notify", True) or not Notify:
+            return
+        n = Notify.Notification.new(title, body, os.path.join(STATUS_ICONS, "repoguard-alert.svg"))
+        n.set_urgency(Notify.Urgency.CRITICAL)
+        try:
+            n.add_action("open", "Open RepoGuard", lambda *a: self.app.show_window())
+        except Exception:
+            pass
+        n.connect("closed", lambda n: self._notes.remove(n) if n in self._notes else None)
+        self._notes.append(n)
+        try:
+            n.show()
+        except GLib.Error:
+            pass  # no notification daemon: the red top-bar icon is the alert
+
     def alert(self, fresh_ids):
         branches = sorted({i.split("|", 1)[0] for i in fresh_ids})
-        if not self.settings.get("notify", True):
-            return
         title = "Malware pushed to GitHub" if len(branches) == 1 else f"Malware pushed to {len(branches)} GitHub branches"
         body = "\n".join(b.replace(":", " · ") for b in branches[:5]) + ("\n…" if len(branches) > 5 else "")
-        body += "\nDon't pull these branches. Open RepoGuard to review."
-        if Notify:
-            n = Notify.Notification.new(title, body, os.path.join(STATUS_ICONS, "repoguard-alert.svg"))
-            n.set_urgency(Notify.Urgency.CRITICAL)
-            try:
-                n.add_action("open", "Open RepoGuard", lambda *a: self.app.show_window())
-            except Exception:
-                pass
-            n.connect("closed", lambda n: self._notes.remove(n) if n in self._notes else None)
-            self._notes.append(n)
-            try:
-                n.show()
-                return
-            except GLib.Error:
-                pass  # no notification daemon: the red top-bar icon is the alert
+        self._notify(title, body + "\nDon't pull these branches. Open RepoGuard to review.")
+
+    def alert_local(self, fresh_ids):
+        places = sorted({i.split("|", 1)[0] for i in fresh_ids})
+        home = os.path.expanduser("~")
+        title = "Malware on this computer" if len(places) == 1 else f"Malware in {len(places)} folders on this computer"
+        body = "\n".join(p.replace(home, "~") for p in places[:5]) + ("\n…" if len(places) > 5 else "")
+        self._notify(title, body + "\nDon't run or open these projects. Open RepoGuard to clean them.")
 
     # ---------------------------------------------------------------- derived status
     def counts(self):
-        return github.summarize(self.state["findings"])
+        c = github.summarize(self.state["findings"])
+        lc = local.summarize(self.local_findings())
+        c["local_danger"], c["local_places"] = lc["danger"], lc["places"]
+        c["review"] += lc["review"]
+        c["total_danger"] = c["danger"] + lc["danger"]
+        return c
 
     def status(self):
         """(icon, headline, detail) for the icon, menu and window."""
         c = self.counts()
         if self.checking:
-            return "repoguard-busy-symbolic", "Checking GitHub…", self.progress
+            return "repoguard-busy-symbolic", "Checking…", self.progress
+        if c["local_danger"]:
+            n = c["local_places"]
+            return ("repoguard-alert", f"Malware on this computer ({n} folder{'s' if n != 1 else ''})",
+                    "Don't run or open these projects. Clean them in RepoGuard.")
         if c["danger"]:
-            return ("repoguard-alert", f"Malware on {c['branches']} branch{'es' if c['branches'] != 1 else ''}",
+            return ("repoguard-alert", f"Malware on {c['branches']} GitHub branch{'es' if c['branches'] != 1 else ''}",
                     f"{c['danger']} dangerous file{'s' if c['danger'] != 1 else ''}. Don't pull these branches.")
         if self.token_problem:
             return "repoguard-off-symbolic", "GitHub not connected", self.token_problem
@@ -184,7 +239,7 @@ class Controller:
             return "repoguard-off-symbolic", "Last check failed", self.state["last_error"]
         if self.settings.get("paused"):
             return "repoguard-paused-symbolic", "Watching paused", "Turn it back on from the menu."
-        if not self.state.get("last_check"):
+        if not self.state.get("last_check") and not self.local.get("last_check"):
             return "repoguard-busy-symbolic", "Not checked yet", "The first check starts in a moment."
         extra = f" · {c['review']} file{'s' if c['review'] != 1 else ''} worth a look" if c["review"] else ""
         return "repoguard-ok-symbolic", "All clear", f"No malware found{extra}"
@@ -194,26 +249,33 @@ class Controller:
         icon, head, detail = self.status()
         c = self.counts()
         if self.tray:
-            self.tray.set_state(icon=icon, label=str(c["danger"]) if c["danger"] else "",
-                                tooltip=f"{head}\n{detail}", attention=bool(c["danger"]))
+            self.tray.set_state(icon=icon, label=str(c["total_danger"]) if c["total_danger"] else "",
+                                tooltip=f"{head}\n{detail}", attention=bool(c["total_danger"]))
             self.tray.set_menu(self.menu_items(head, detail, c))
         for fn in list(self.listeners):
             fn()
 
     def menu_items(self, head, detail, c):
         repos = len(self.state.get("repos", []))
+        home = os.path.expanduser("~")
         items = [{"label": head, "enabled": False},
                  {"label": detail[:70], "enabled": False, "visible": bool(detail)},
-                 {"label": f"GitHub: {repos} repos · checked {ago(self.state.get('last_check'))}", "enabled": False}]
+                 {"label": f"GitHub: {repos} repos · checked {ago(self.state.get('last_check'))}", "enabled": False},
+                 {"label": f"This computer: {len(self.local.get('repos', []))} repos · checked "
+                           f"{ago(self.local.get('last_check'))}", "enabled": False}]
+        bad_local = [k for k, f in sorted(self.local_findings().items())
+                     if any(x["severity"] == "danger" for x in f["files"])]
         bad = [k for k, files in sorted(self.state["findings"].items()) if any(f["severity"] == "danger" for f in files)]
-        if bad:
+        if bad_local or bad:
             items.append({"separator": True})
+            for root in bad_local[:4]:
+                items.append({"label": f"⚠ {root.replace(home, '~')}", "action": self.app.show_window})
             for key in bad[:6]:
                 n = sum(1 for f in self.state["findings"][key] if f["severity"] == "danger")
                 items.append({"label": f"⚠ {key.replace(':', ' · ')}  ({n})", "icon": "web-browser-symbolic",
                               "action": lambda key=key: open_url(github.branch_url(key))})
-            if len(bad) > 6:
-                items.append({"label": f"…and {len(bad) - 6} more", "action": self.app.show_window})
+            if len(bad) > 6 or len(bad_local) > 4:
+                items.append({"label": "…and more", "action": self.app.show_window})
         items += [{"separator": True},
                   {"label": "Check now", "enabled": not self.checking, "action": self.check_now},
                   {"label": "Open RepoGuard…", "action": self.app.show_window},
@@ -331,16 +393,32 @@ class Window(Adw.ApplicationWindow):
                 exp.add_row(self._file_row(key, f, "dialog-error-symbolic"))
             tg.add(exp)
 
-        if review:
+        self._local_group()
+
+        local_review = [(root, x) for root, f in sorted(ctl.local_findings().items())
+                        for x in f["files"] if x["severity"] != "danger"]
+        if review or local_review:
             rg = self._group("Worth a look (not malware)",
                              "Normal files that can run code: GitHub workflows, .npmrc, npm install scripts, "
-                             "VS Code tasks. Check them only if you didn't add them yourself.")
-            exp = Adw.ExpanderRow(title=f"{len(review)} file{'s' if len(review) != 1 else ''} that can run code",
-                                  subtitle=f"in {len({k for k, _ in review})} branches")
-            exp.add_prefix(Gtk.Image.new_from_icon_name("dialog-information-symbolic"))
-            for key, f in review:
-                exp.add_row(self._file_row(key, f, "dialog-information-symbolic", show_branch=True))
-            rg.add(exp)
+                             "VS Code tasks, git hooks. Check them only if you didn't add them yourself.")
+            if review:
+                exp = Adw.ExpanderRow(title=f"On GitHub: {len(review)} file{'s' if len(review) != 1 else ''}",
+                                      subtitle=f"in {len({k for k, _ in review})} branches")
+                exp.add_prefix(Gtk.Image.new_from_icon_name("dialog-information-symbolic"))
+                for key, f in review:
+                    exp.add_row(self._file_row(key, f, "dialog-information-symbolic", show_branch=True))
+                rg.add(exp)
+            if local_review:
+                home = os.path.expanduser("~")
+                exp = Adw.ExpanderRow(title=f"On this computer: {len(local_review)} file{'s' if len(local_review) != 1 else ''}",
+                                      subtitle=f"in {len({r for r, _ in local_review})} folders")
+                exp.add_prefix(Gtk.Image.new_from_icon_name("dialog-information-symbolic"))
+                for root, x in local_review:
+                    labels = " · ".join(dict.fromkeys(h[2] for h in x["hits"]))
+                    exp.add_row(Adw.ActionRow(
+                        title=GLib.markup_escape_text(x["path"]),
+                        subtitle=GLib.markup_escape_text(f"{root.replace(home, '~')} · {WHERE(x['where'])} — {labels}")))
+                rg.add(exp)
 
         warnings = ctl.state.get("last_warnings") or []
         if warnings:
@@ -357,6 +435,54 @@ class Window(Adw.ApplicationWindow):
                                    subtitle="private" if r.get("private") else "public")
                 exp.add_row(rr)
             rg.add(exp)
+
+    def _local_group(self):
+        ctl = self.ctl
+        home = os.path.expanduser("~")
+        lst = ctl.local
+        folders = ", ".join(f.replace(home, "~") for f in ctl.settings.get("folders", []))
+        g = self._group("Code on this computer",
+                        f"Watching {folders} · {lst.get('files_checked', 0)} files in {len(lst.get('repos', []))} git "
+                        f"repos · checked {ago(lst.get('last_check'))}. Files, every local branch, .git/config and "
+                        "hooks are read, never run.")
+        if lst.get("last_error"):
+            g.add(Adw.ActionRow(title="Last check failed", subtitle=GLib.markup_escape_text(lst["last_error"])))
+        bad = {k: [x for x in v["files"] if x["severity"] == "danger"] for k, v in ctl.local_findings().items()}
+        bad = {k: v for k, v in bad.items() if v}
+        if not bad:
+            g.add(Adw.ActionRow(title="No malware found", subtitle="Every watched folder is clean."))
+        for root in sorted(bad):
+            files = bad[root]
+            exp = Adw.ExpanderRow(title=GLib.markup_escape_text(root.replace(home, "~")),
+                                  subtitle=f"{len(files)} dangerous item{'s' if len(files) != 1 else ''}")
+            exp.add_prefix(Gtk.Image.new_from_icon_name("dialog-warning-symbolic"))
+            exp.add_css_class("error")
+            cb = Gtk.Button(label="Review & clean…", valign=Gtk.Align.CENTER)
+            cb.add_css_class("suggested-action")
+            cb.connect("clicked", lambda *_, r=root: self.open_local_clean(r))
+            exp.add_suffix(cb)
+            ib = Gtk.Button(icon_name="view-conceal-symbolic", valign=Gtk.Align.CENTER,
+                            tooltip_text="Ignore this folder (for example a security tool's own test files)")
+            ib.add_css_class("flat")
+            ib.connect("clicked", lambda *_, r=root: (ctl.ignore_folder(r), self._rebuild_local_settings(),
+                                                       self.toast("Folder ignored. Undo in Settings.")))
+            exp.add_suffix(ib)
+            for x in sorted(files, key=lambda x: (x["where"], x["path"])):
+                labels = " · ".join(dict.fromkeys(h[2] for h in x["hits"]))
+                r = Adw.ActionRow(title=GLib.markup_escape_text(x["path"]),
+                                  subtitle=GLib.markup_escape_text(f"{WHERE(x['where'])} — {labels}"))
+                r.add_prefix(Gtk.Image.new_from_icon_name("dialog-error-symbolic"))
+                exp.add_row(r)
+            g.add(exp)
+        ignored = ctl.local_findings(ignored=True)
+        if ignored:
+            g.add(Adw.ActionRow(title=f"{len(ignored)} ignored folder{'s' if len(ignored) != 1 else ''}",
+                                subtitle=GLib.markup_escape_text(", ".join(r.replace(home, "~") for r in sorted(ignored))
+                                                                 + " · change in Settings")))
+
+    def open_local_clean(self, root):
+        from .localdialog import LocalCleanDialog
+        LocalCleanDialog(self.ctl, root).present(self)
 
     def _file_row(self, key, f, icon, show_branch=False):
         labels = " · ".join(dict.fromkeys(h[2] for h in f["hits"]))
@@ -435,6 +561,9 @@ class Window(Adw.ApplicationWindow):
         g.add(auto)
         self.settings_page.add(g)
 
+        self._local_settings = []
+        self._rebuild_local_settings()
+
         pg = Adw.PreferencesGroup(
             title="Git protection",
             description="Checks what git fetch, pull and clone bring in, before your files change, in the terminal, "
@@ -458,6 +587,86 @@ class Window(Adw.ApplicationWindow):
         fg.add(forget)
         self.settings_page.add(fg)
         self._update_conn()
+
+    def _rebuild_local_settings(self):
+        """Folders to watch, ignored folders and past cleanings (rebuilt when they change)."""
+        from . import localclean
+        ctl, home = self.ctl, os.path.expanduser("~")
+        for grp in self._local_settings:
+            self.settings_page.remove(grp)
+        self._local_settings = []
+
+        fg = Adw.PreferencesGroup(title="Folders to watch on this computer",
+                                  description="Your code folders. Every project in them is checked, including each "
+                                              "git repo's local branches.")
+        for f in ctl.settings.get("folders", []):
+            row = Adw.ActionRow(title=GLib.markup_escape_text(f.replace(home, "~")))
+            rb = Gtk.Button(icon_name="list-remove-symbolic", valign=Gtk.Align.CENTER, tooltip_text="Stop watching")
+            rb.add_css_class("flat")
+            rb.connect("clicked", lambda *_, f=f: self._set_folders([x for x in ctl.settings["folders"] if x != f]))
+            row.add_suffix(rb)
+            fg.add(row)
+        add = Adw.ButtonRow(title="Add folder…", start_icon_name="list-add-symbolic")
+        add.connect("activated", lambda *_: self._pick_folder())
+        fg.add(add)
+
+        ig = Adw.PreferencesGroup(title="Ignored folders",
+                                  description="Still checked, but never alert or count as malware.")
+        for f in ctl.settings.get("local_ignore", []):
+            row = Adw.ActionRow(title=GLib.markup_escape_text(f.replace(home, "~")))
+            b = Gtk.Button(label="Stop ignoring", valign=Gtk.Align.CENTER)
+            b.connect("clicked", lambda *_, f=f: (ctl.ignore_folder(f, False), self._rebuild_local_settings()))
+            row.add_suffix(b)
+            ig.add(row)
+        if not ctl.settings.get("local_ignore"):
+            ig.add(Adw.ActionRow(title="None"))
+
+        ug = Adw.PreferencesGroup(title="Undo a cleaning",
+                                  description="Every cleaning backs up the original files first.")
+        past = localclean.backups()[:8]
+        for qdir, undo in past:
+            n = len(undo["files"]) + bool(undo.get("git_config"))
+            row = Adw.ActionRow(title=GLib.markup_escape_text(undo["root"].replace(home, "~")),
+                                subtitle=f"{undo['time']} · {n} file{'s' if n != 1 else ''}"
+                                         + (f" · {len(undo['branches'])} branch commit(s)" if undo["branches"] else ""))
+            b = Gtk.Button(label="Undo", valign=Gtk.Align.CENTER)
+            b.connect("clicked", lambda *_, q=qdir: self._undo(q))
+            row.add_suffix(b)
+            ug.add(row)
+        if not past:
+            ug.add(Adw.ActionRow(title="Nothing cleaned yet"))
+
+        for grp in (fg, ig, ug):
+            self.settings_page.add(grp)
+            self._local_settings.append(grp)
+
+    def _set_folders(self, folders):
+        self.ctl.settings["folders"] = folders
+        self.ctl.save_settings()
+        self._rebuild_local_settings()
+        self.ctl.check_now()
+
+    def _pick_folder(self):
+        dlg = Gtk.FileDialog(title="Choose a code folder to watch")
+
+        def done(d, res):
+            try:
+                f = d.select_folder_finish(res)
+            except GLib.Error:
+                return
+            path = f.get_path()
+            if path and path not in self.ctl.settings["folders"]:
+                self._set_folders(self.ctl.settings["folders"] + [path])
+        dlg.select_folder(self, None, done)
+
+    def _undo(self, qdir):
+        from . import localclean
+        try:
+            res = localclean.restore(qdir)
+            self.toast(f"Put back {res['files']} file(s)" + (f" and {len(res['branches'])} branch(es)" if res["branches"] else ""))
+        except Exception as e:
+            self.toast(f"Couldn't undo: {e}")
+        self.ctl.check_now()
 
     def _on_protect(self, row, _):
         want = row.get_active()

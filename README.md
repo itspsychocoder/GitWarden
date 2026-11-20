@@ -70,6 +70,23 @@ commit changed. File verdicts are cached by blob SHA, so only files that actuall
 Large first scans are spread over several checks (max 1,500 files per check, and it stops if your API
 rate limit gets low).
 
+## Code on this computer
+
+Every check also reads your code folders (Settings → Folders to watch; default `~/Working`): the files on
+disk, every local and remote-tracking branch of each git repo, each repo's `.git/config` (settings such as
+`core.fsmonitor` or `core.sshCommand` that make git run a program) and its `.git/hooks`. Files are cached by
+size and time, git blobs by ID, so later checks take a fraction of a second.
+
+**Review & clean…** shows each file it will delete or cut, with the exact code. Then it:
+- backs up every file it touches to `~/.local/state/repoguard/quarantine/<time>-<folder>/` (not executable);
+- cleans the files on disk and removes the dangerous `.git/config` lines;
+- optionally commits the cleaned files on the checked-out branch (only those files; the repo's hooks off);
+- adds a cleanup commit on other infected local branches without checking them out.
+
+**Undo** (right after, or in Settings) puts every file and branch back. A file that changed after the preview
+is left alone. Remote-tracking branches are only reported: clean them on the server (Fix… on GitHub).
+**Ignore** a folder (e.g. a security tool's own test data) to stop it alerting; it is still scanned.
+
 ## Blocking infected pulls
 
 Settings → **Block infected pulls and clones** (or `repoguard protect on`). RepoGuard sets git's global
@@ -112,7 +129,7 @@ python3 -m unittest discover -s tests -t . -v
 ## Roadmap
 
 - [x] Detection engine, GitHub watch, alerts, top-bar icon, window
-- [ ] Review & remove malware in local clones (preview, backup)
+- [x] Review & remove malware in local clones (preview, backup, undo)
 - [x] Git hook that blocks pulls/fetches/clones bringing malware
 - [ ] Linux PC check: crontab, systemd user units, autostart, shell rc files, ~/.ssh/authorized_keys, /tmp
 - [x] Fix on GitHub: one cleanup commit
