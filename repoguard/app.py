@@ -1,5 +1,6 @@
 """RepoGuard for Linux: top-bar status icon + window (GTK 4 / libadwaita)."""
 import copy
+import json
 import os
 import sys
 import threading
@@ -17,7 +18,7 @@ try:
 except (ValueError, ImportError):
     Notify = None
 
-from . import autostart, config, github, local, protect  # noqa: E402
+from . import autostart, config, github, local, pc, protect  # noqa: E402
 from .tray import Tray  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -67,6 +68,7 @@ class Controller:
         self.state.setdefault("alerted", [])
         self.local = local.load_state()
         self.local.setdefault("alerted", [])
+        self.pc = config.load_json(os.path.join(config.state_dir(), "pc.json"), {"findings": [], "alerted": []})
         self.settings.setdefault("folders", local.default_folders())
         self.settings.setdefault("local_ignore", [])
         self.checking = False
@@ -122,12 +124,20 @@ class Controller:
         folders = list(self.settings.get("folders") or [])
         progress = lambda m: GLib.idle_add(self._set_progress, m)  # noqa: E731
 
+        hooks = protect.hooks_dir()
+
         def work():
             gh_err = result = local_err = None
+            pc_findings = None
             try:
                 local.Scanner(local_state, folders, progress=progress).run()
             except Exception as e:
                 local_err = f"Couldn't check this computer: {e!r}"
+            try:
+                progress("Checking this PC…")
+                pc_findings = pc.scan(own_hooks=hooks)
+            except Exception as e:
+                local_err = (local_err or "") + f" Couldn't run the PC check: {e!r}"
             if token:
                 try:
                     watcher = github.Watcher(github.GitHub(token), gh_state, progress=progress,
@@ -137,7 +147,7 @@ class Controller:
                     gh_err = ("GitHub rejected the token. Paste a new one in Settings." if e.status == 401 else str(e))
                 except Exception as e:  # keep the app alive whatever happens
                     gh_err = f"Unexpected error: {e!r}"
-            GLib.idle_add(self._done, gh_state if token else None, result, gh_err, local_state, local_err)
+            GLib.idle_add(self._done, gh_state if token else None, result, gh_err, local_state, local_err, pc_findings)
 
         threading.Thread(target=work, name="repoguard-check", daemon=True).start()
 
@@ -146,8 +156,19 @@ class Controller:
         self.refresh()
         return False
 
-    def _done(self, gh_state, result, err, local_state, local_err):
+    def _done(self, gh_state, result, err, local_state, local_err, pc_findings=None):
         self.checking, self.progress = False, ""
+        if pc_findings is not None:
+            self.pc["findings"], self.pc["last_check"] = pc_findings, time.time()
+            current = {f["id"] for f in pc_findings if f["severity"] == "danger"}
+            fresh = current - set(self.pc.get("alerted", []))
+            self.pc["alerted"] = sorted(current)
+            config.save_json(os.path.join(config.state_dir(), "pc.json"), self.pc)
+            if fresh:
+                bad = [f for f in pc_findings if f["id"] in fresh]
+                self._notify("Signs of malware on this PC",
+                             "\n".join(f"{f['title']}: {f['label']}" for f in bad[:4])
+                             + ("\n…" if len(bad) > 4 else "") + "\nOpen RepoGuard to review and fix.")
         if gh_state is not None:
             gh_state["last_error"] = err
             if result and result.get("errors"):
@@ -218,7 +239,10 @@ class Controller:
         lc = local.summarize(self.local_findings())
         c["local_danger"], c["local_places"] = lc["danger"], lc["places"]
         c["review"] += lc["review"]
-        c["total_danger"] = c["danger"] + lc["danger"]
+        pcf = self.pc.get("findings", [])
+        c["pc_danger"] = sum(1 for f in pcf if f["severity"] == "danger")
+        c["review"] += sum(1 for f in pcf if f["severity"] != "danger")
+        c["total_danger"] = c["danger"] + lc["danger"] + c["pc_danger"]
         return c
 
     def status(self):
@@ -226,6 +250,9 @@ class Controller:
         c = self.counts()
         if self.checking:
             return "repoguard-busy-symbolic", "Checking…", self.progress
+        if c["pc_danger"]:
+            return ("repoguard-alert", f"Signs of malware on this PC ({c['pc_danger']})",
+                    "Something here keeps malware running. Review it in RepoGuard.")
         if c["local_danger"]:
             n = c["local_places"]
             return ("repoguard-alert", f"Malware on this computer ({n} folder{'s' if n != 1 else ''})",
@@ -394,10 +421,12 @@ class Window(Adw.ApplicationWindow):
             tg.add(exp)
 
         self._local_group()
+        self._pc_group()
 
         local_review = [(root, x) for root, f in sorted(ctl.local_findings().items())
                         for x in f["files"] if x["severity"] != "danger"]
-        if review or local_review:
+        pc_review = [f for f in ctl.pc.get("findings", []) if f["severity"] != "danger"]
+        if review or local_review or pc_review:
             rg = self._group("Worth a look (not malware)",
                              "Normal files that can run code: GitHub workflows, .npmrc, npm install scripts, "
                              "VS Code tasks, git hooks. Check them only if you didn't add them yourself.")
@@ -418,6 +447,17 @@ class Window(Adw.ApplicationWindow):
                     exp.add_row(Adw.ActionRow(
                         title=GLib.markup_escape_text(x["path"]),
                         subtitle=GLib.markup_escape_text(f"{root.replace(home, '~')} · {WHERE(x['where'])} — {labels}")))
+                rg.add(exp)
+            if pc_review:
+                exp = Adw.ExpanderRow(title=f"On this PC: {len(pc_review)} item{'s' if len(pc_review) != 1 else ''}",
+                                      subtitle="Things that start by themselves or allow access. Fine if they're yours.")
+                exp.add_prefix(Gtk.Image.new_from_icon_name("dialog-information-symbolic"))
+                for f in pc_review:
+                    exp.add_row(Adw.ActionRow(title=GLib.markup_escape_text(f["title"]),
+                                              subtitle=GLib.markup_escape_text(f"{f['label']} — {f['detail'][:120]}")))
+                b = Gtk.Button(label="Review…", valign=Gtk.Align.CENTER)
+                b.connect("clicked", lambda *_: self.open_pc_fix())
+                exp.add_suffix(b)
                 rg.add(exp)
 
         warnings = ctl.state.get("last_warnings") or []
@@ -479,6 +519,37 @@ class Window(Adw.ApplicationWindow):
             g.add(Adw.ActionRow(title=f"{len(ignored)} ignored folder{'s' if len(ignored) != 1 else ''}",
                                 subtitle=GLib.markup_escape_text(", ".join(r.replace(home, "~") for r in sorted(ignored))
                                                                  + " · change in Settings")))
+
+    def _pc_group(self):
+        ctl = self.ctl
+        f_all = ctl.pc.get("findings", [])
+        bad = [f for f in f_all if f["severity"] == "danger"]
+        g = self._group("This PC", f"Crontab, services, login autostart, shell startup files, SSH keys, temp "
+                                   f"folders, running programs, git/npm/VS Code settings · checked "
+                                   f"{ago(ctl.pc.get('last_check'))}")
+        if not bad:
+            g.add(Adw.ActionRow(title="No signs of malware",
+                                subtitle="Nothing here starts malware or lets someone in."))
+            return
+        exp = Adw.ExpanderRow(title=f"{len(bad)} sign{'s' if len(bad) != 1 else ''} of malware",
+                              subtitle="Something on this PC keeps malware running or lets someone in")
+        exp.add_prefix(Gtk.Image.new_from_icon_name("dialog-warning-symbolic"))
+        exp.add_css_class("error")
+        b = Gtk.Button(label="Review & fix…", valign=Gtk.Align.CENTER)
+        b.add_css_class("suggested-action")
+        b.connect("clicked", lambda *_: self.open_pc_fix())
+        exp.add_suffix(b)
+        for f in bad:
+            r = Adw.ActionRow(title=GLib.markup_escape_text(f["title"]),
+                              subtitle=GLib.markup_escape_text(f"{f['label']} — {f['detail'][:140]}"))
+            r.add_prefix(Gtk.Image.new_from_icon_name("dialog-error-symbolic"))
+            exp.add_row(r)
+        exp.set_expanded(True)
+        g.add(exp)
+
+    def open_pc_fix(self):
+        from .pcdialog import PCFixDialog
+        PCFixDialog(self.ctl).present(self)
 
     def open_local_clean(self, root):
         from .localdialog import LocalCleanDialog
@@ -632,13 +703,37 @@ class Window(Adw.ApplicationWindow):
             b = Gtk.Button(label="Undo", valign=Gtk.Align.CENTER)
             b.connect("clicked", lambda *_, q=qdir: self._undo(q))
             row.add_suffix(b)
+            row.add_suffix(self._delete_button(qdir, local=True))
             ug.add(row)
         if not past:
             ug.add(Adw.ActionRow(title="Nothing cleaned yet"))
 
-        for grp in (fg, ig, ug):
+        from . import fix
+        hg = Adw.PreferencesGroup(title="History rewrite backups",
+                                  description="Copies of GitHub repos from before a history rewrite. They still "
+                                              "contain the malware (as git data; nothing in them runs). Delete each "
+                                              "one once the cleaned repo is right.")
+        hb = fix.list_backups()
+        for path, size, mtime in hb:
+            row = Adw.ActionRow(title=GLib.markup_escape_text(os.path.basename(path)[:-4].replace("__", "/")),
+                                subtitle=f"{time.strftime('%d %b %H:%M', time.localtime(mtime))} · "
+                                         f"{size / 1e6:.1f} MB")
+            row.add_suffix(self._delete_button(path, local=False))
+            hg.add(row)
+        if not hb:
+            hg.add(Adw.ActionRow(title="None"))
+
+        for grp in (fg, ig, ug, hg):
             self.settings_page.add(grp)
             self._local_settings.append(grp)
+
+    def _delete_button(self, path, local):
+        from .fixdialog import confirm_delete_backup
+        b = Gtk.Button(icon_name="user-trash-symbolic", valign=Gtk.Align.CENTER, tooltip_text="Delete this backup")
+        b.add_css_class("flat")
+        b.connect("clicked", lambda *_: confirm_delete_backup(
+            self, path, lambda: (self._rebuild_local_settings(), self.toast("Backup deleted.")), local=local))
+        return b
 
     def _set_folders(self, folders):
         self.ctl.settings["folders"] = folders
@@ -660,9 +755,11 @@ class Window(Adw.ApplicationWindow):
         dlg.select_folder(self, None, done)
 
     def _undo(self, qdir):
-        from . import localclean
+        from . import localclean, pcclean
         try:
-            res = localclean.restore(qdir)
+            with open(os.path.join(qdir, "undo.json"), encoding="utf8") as fh:
+                kind = json.load(fh).get("kind")
+            res = (pcclean if kind == "pc" else localclean).restore(qdir)
             self.toast(f"Put back {res['files']} file(s)" + (f" and {len(res['branches'])} branch(es)" if res["branches"] else ""))
         except Exception as e:
             self.toast(f"Couldn't undo: {e}")

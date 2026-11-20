@@ -149,6 +149,12 @@ class WatchTest(unittest.TestCase):
         self.assertEqual(github.finding_ids(findings, danger_only=True), {"me/a:main|init|b2|known_code"})
         self.assertEqual(len(github.finding_ids(findings)), 3)
 
+    def test_summary_counts_only_infected_branches(self):
+        review = {"path": "x.yml", "blob": "b", "severity": "review", "hits": [["autorun_location", "review", "x"]]}
+        danger = {"path": "init", "blob": "c", "severity": "danger", "hits": [["known_code", "danger", "y"]]}
+        c = github.summarize({"a:main": [review], "b:main": [review, danger], "c:dev": [danger]})
+        self.assertEqual((c["branches"], c["danger"], c["review"]), (2, 2, 2))
+
     def test_state_round_trip(self):
         self.mock.add(self.root, "me/app")
         state = github.load_state()

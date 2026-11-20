@@ -374,8 +374,8 @@ def summarize(findings):
     """{'danger': n, 'review': n, 'branches': n} over all findings."""
     out = {"danger": 0, "review": 0, "branches": 0}
     for files in findings.values():
-        if files:
-            out["branches"] += 1
+        if any(f["severity"] == "danger" for f in files):
+            out["branches"] += 1  # branches with malware (not ones with only "worth a look" notes)
         for f in files:
             out[f["severity"]] += 1
     return out

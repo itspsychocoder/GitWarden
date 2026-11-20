@@ -174,6 +174,16 @@ class HistoryRewriteTest(FixBase):
         finally:
             rw.close()
 
+    def test_delete_backup_only_inside_backup_folder(self):
+        os.makedirs(os.path.join(fix.backup_root(), "me__app-1.git"))
+        self.assertEqual(len(fix.list_backups()), 1)
+        fix.delete_backup(fix.list_backups()[0][0])
+        self.assertEqual(fix.list_backups(), [])
+        for bad in (self.root, fix.backup_root(), os.path.join(fix.backup_root(), "..", "x.git"), "/tmp/x.git"):
+            with self.assertRaises(ValueError):
+                fix.delete_backup(bad)
+        self.assertTrue(os.path.exists(self.root))
+
     def test_close_drops_token(self):
         rw = self.rewrite()
         rw.prepare()

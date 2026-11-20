@@ -198,7 +198,7 @@ class HistoryRewrite:
         self.env = _auth_env(token)
         self.det = detector or Detector()
         self.progress = progress or (lambda m: None)
-        self.backup_root = backup_root or os.path.join(config.state_dir(), "backups")
+        self.backup_root = backup_root or globals()["backup_root"]()
         self.backup = self.work = self._tmp = None
         self.verdicts = {}      # (blob, path) -> Plan
         self.trees = {}         # old tree -> new tree
@@ -444,6 +444,37 @@ class HistoryRewrite:
             shutil.rmtree(self._tmp, ignore_errors=True)
             self._tmp = None
         self.env = {}
+
+
+def backup_root():
+    return os.path.join(config.state_dir(), "backups")
+
+
+def _inside(path, root):
+    path, root = os.path.realpath(path), os.path.realpath(root)
+    return path != root and path.startswith(root + os.sep)
+
+
+def list_backups():
+    """[(path, bytes, mtime)] of history-rewrite backups, newest first."""
+    out = []
+    root = backup_root()
+    try:
+        for name in os.listdir(root):
+            p = os.path.join(root, name)
+            if os.path.isdir(p) and name.endswith(".git"):
+                size = sum(os.path.getsize(os.path.join(d, f)) for d, _, fs in os.walk(p) for f in fs)
+                out.append((p, size, os.path.getmtime(p)))
+    except OSError:
+        pass
+    return sorted(out, key=lambda x: -x[2])
+
+
+def delete_backup(path):
+    """Delete one history-rewrite backup. Refuses anything outside RepoGuard's backup folder."""
+    if not _inside(path, backup_root()) or not path.endswith(".git"):
+        raise ValueError(f"not a RepoGuard backup: {path}")
+    shutil.rmtree(path)
 
 
 class _Keep:

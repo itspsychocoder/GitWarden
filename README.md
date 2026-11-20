@@ -87,6 +87,24 @@ size and time, git blobs by ID, so later checks take a fraction of a second.
 is left alone. Remote-tracking branches are only reported: clean them on the server (Fix… on GitHub).
 **Ignore** a folder (e.g. a security tool's own test data) to stop it alerting; it is still scanned.
 
+## This PC
+
+Every check also looks where malware hides to keep running or keep access: your crontab and the system's,
+systemd services and timers, login autostart entries, shell startup files (`~/.bashrc`, `~/.profile`,
+`~/.zshrc`…), `~/.ssh/authorized_keys`, programs and scripts in `/tmp`, `/var/tmp` and `/dev/shm`, running
+programs, global git config, `~/.npmrc`, VS Code's `task.allowAutomaticTasks`, and `/etc/ld.so.preload`.
+
+- **Malware sign**: commands that download and run code, run base64-hidden code or open a reverse shell;
+  programs running from a temp folder or from a deleted file; scripts run from temp folders; known miners.
+- **Worth a look**: things that start by themselves or allow access (your own services and autostart
+  entries, SSH keys, remote-access tools). A running program whose command line merely *mentions* something
+  suspicious is only worth a look and never stopped.
+
+**Review & fix…** ticks the malware signs (not the "worth a look" items). It stops dangerous programs (after
+checking the process ID still runs the same program; never RepoGuard itself or what started it), then backs
+up and removes files, lines, crontab entries and user services. Undo puts the files back; stopped programs
+stay stopped. Anything that needs admin rights is listed with the command to run.
+
 ## Blocking infected pulls
 
 Settings → **Block infected pulls and clones** (or `repoguard protect on`). RepoGuard sets git's global
@@ -131,6 +149,6 @@ python3 -m unittest discover -s tests -t . -v
 - [x] Detection engine, GitHub watch, alerts, top-bar icon, window
 - [x] Review & remove malware in local clones (preview, backup, undo)
 - [x] Git hook that blocks pulls/fetches/clones bringing malware
-- [ ] Linux PC check: crontab, systemd user units, autostart, shell rc files, ~/.ssh/authorized_keys, /tmp
+- [x] Linux PC check: crontab, systemd, autostart, shell rc files, SSH keys, temp folders, processes, git/npm/VS Code settings
 - [x] Fix on GitHub: one cleanup commit
 - [x] Rewrite history on GitHub (force-push) with mirror backup and typed confirmation

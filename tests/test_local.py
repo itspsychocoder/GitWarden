@@ -146,6 +146,10 @@ class LocalTest(unittest.TestCase):
         self.assertFalse(os.path.exists(os.path.join(self.plain, "init")))
         self.assertTrue(os.path.exists(os.path.join(self.plain, "ok.js")))
         self.assertEqual(localclean.backups()[0][0], res["undo"])
+        with self.assertRaises(ValueError):
+            localclean.delete_backup(self.plain)  # not a backup: refused
+        localclean.delete_backup(res["undo"])
+        self.assertEqual(localclean.backups(), [])
 
 
 if __name__ == "__main__":

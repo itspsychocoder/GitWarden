@@ -227,6 +227,15 @@ def restore(qdir):
     return {"files": put_back, "branches": moved}
 
 
+def delete_backup(qdir):
+    """Delete one cleaning backup (Undo is no longer possible). Refuses anything outside the quarantine folder."""
+    root = os.path.realpath(quarantine_root())
+    real = os.path.realpath(qdir)
+    if real == root or not real.startswith(root + os.sep) or not os.path.exists(os.path.join(real, "undo.json")):
+        raise ValueError(f"not a RepoGuard backup: {qdir}")
+    shutil.rmtree(real)
+
+
 def backups():
     """[(folder, undo dict)] newest first."""
     root = quarantine_root()

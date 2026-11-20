@@ -54,6 +54,33 @@ def diff_widget(text):
     return sw
 
 
+def confirm_delete_backup(parent, path, done, local=False):
+    """Ask, then delete one backup (history backup, or a cleaning backup when local=True)."""
+    d = Adw.AlertDialog(
+        heading="Delete this backup?",
+        body=("Undo won't be possible any more." if local else
+              "It is the only copy of the repo from before the rewrite. Delete it once you're sure the cleaned "
+              "repo is right."))
+    d.add_response("cancel", "Cancel")
+    d.add_response("delete", "Delete")
+    d.set_response_appearance("delete", Adw.ResponseAppearance.DESTRUCTIVE)
+    d.set_close_response("cancel")
+
+    def on_response(_d, response):
+        if response != "delete":
+            return
+        from . import localclean
+        try:
+            (localclean.delete_backup if local else fix.delete_backup)(path)
+            done()
+        except (OSError, ValueError) as e:
+            err = Adw.AlertDialog(heading="Couldn't delete it", body=esc(str(e)))
+            err.add_response("ok", "OK")
+            err.present(parent)
+    d.connect("response", on_response)
+    d.present(parent)
+
+
 class FixDialog(Adw.Dialog):
     def __init__(self, ctl, repo, branches, preselect=None):
         super().__init__(title=f"Fix {repo}", content_width=720, content_height=680)
@@ -382,10 +409,13 @@ class FixDialog(Adw.Dialog):
             r.add_suffix(sb)
             g.add(r)
             if backup:
-                r = Adw.ActionRow(title="Backup of the original repo", subtitle=esc(backup))
-                ob = Gtk.Button(label="Open folder", valign=Gtk.Align.CENTER)
-                ob.connect("clicked", lambda *_: open_url("file://" + os.path.dirname(backup)))
-                r.add_suffix(ob)
+                r = Adw.ActionRow(title="Backup of the original repo (still has the malware)",
+                                  subtitle=esc(f"{backup}\nKeep it until you've checked the cleaned repo, then delete it."))
+                db = Gtk.Button(label="Delete backup", valign=Gtk.Align.CENTER)
+                db.add_css_class("destructive-action")
+                db.connect("clicked", lambda *_: confirm_delete_backup(self, backup, lambda: (
+                    db.set_sensitive(False), db.set_label("Deleted"), r.set_subtitle(esc(backup) + " · deleted"))))
+                r.add_suffix(db)
                 g.add(r)
         page.add(g)
         done = self._nav_page(page, "Done", "done")
