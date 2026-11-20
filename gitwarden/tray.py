@@ -81,7 +81,7 @@ class Tray:
         self.app_id, self.title = app_id, title
         self.icon_dir = icon_dir
         self.on_activate = on_activate
-        self.icon, self.label, self.tooltip, self.status = "repoguard-ok-symbolic", "", title, "Active"
+        self.icon, self.label, self.tooltip, self.status = "gitwarden-ok-symbolic", "", title, "Active"
         self.items = []          # list of dicts, ids are index+1 (0 is the root)
         self.revision = 1
         self.bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
@@ -117,7 +117,7 @@ class Tray:
                 if self.on_host_change:
                     self.on_host_change(True)
             except GLib.Error as e:
-                print("RepoGuard: could not add the top-bar icon:", e.message)
+                print("GitWarden: could not add the top-bar icon:", e.message)
         self.bus.call("org.kde.StatusNotifierWatcher", "/StatusNotifierWatcher", "org.kde.StatusNotifierWatcher",
                       "RegisterStatusNotifierItem", GLib.Variant("(s)", (self.bus_name,)), None,
                       Gio.DBusCallFlags.NONE, -1, None, done)

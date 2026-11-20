@@ -12,7 +12,7 @@ import sys
 
 if __package__ in (None, ""):
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from repoguard.detect import DANGER, Detector  # noqa: E402
+from gitwarden.detect import DANGER, Detector  # noqa: E402
 
 
 def git(*args, data=None):
@@ -84,12 +84,12 @@ def main(argv=None):
     a = ap.parse_args(argv)
     try:
         found = scan(a.incoming, everything=a.all)
-    except Exception as e:  # never block a fetch because RepoGuard itself broke
-        print(f"RepoGuard: couldn't scan the incoming code ({e}); letting it through.", file=sys.stderr)
+    except Exception as e:  # never block a fetch because GitWarden itself broke
+        print(f"GitWarden: couldn't scan the incoming code ({e}); letting it through.", file=sys.stderr)
         return 2
     if not found:
         return 0
-    print("\nRepoGuard: MALWARE in the incoming code. Nothing was changed.", file=sys.stderr)
+    print("\nGitWarden: MALWARE in the incoming code. Nothing was changed.", file=sys.stderr)
     for path, labels in found[:20]:
         print(f"  {path}  ({', '.join(labels)})", file=sys.stderr)
     if len(found) > 20:

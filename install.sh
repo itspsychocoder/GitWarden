@@ -1,17 +1,17 @@
 #!/bin/sh
-# Installs RepoGuard for the current user only (no sudo): a `repoguard` command, an app-menu entry, and
+# Installs GitWarden for the current user only (no sudo): a `gitwarden` command, an app-menu entry, and
 # (optional) start at login. Run from this folder: ./install.sh   Remove with: ./install.sh --uninstall
 set -eu
 HERE=$(cd "$(dirname "$0")" && pwd)
-APP_ID=io.github.RepoGuardLinux
-BIN="$HOME/.local/bin/repoguard"
+APP_ID=io.github.itspsychocoder.GitWarden
+BIN="$HOME/.local/bin/gitwarden"
 APPS="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
 ICONS="${XDG_DATA_HOME:-$HOME/.local/share}/icons/hicolor/scalable/apps"
 AUTO="${XDG_CONFIG_HOME:-$HOME/.config}/autostart/$APP_ID.desktop"
 
 if [ "${1:-}" = "--uninstall" ]; then
   rm -f "$BIN" "$APPS/$APP_ID.desktop" "$ICONS/$APP_ID.svg" "$AUTO"
-  echo "RepoGuard removed. Your settings stay in ~/.config/repoguard and ~/.local/state/repoguard."
+  echo "GitWarden removed. Your settings stay in ~/.config/gitwarden and ~/.local/state/gitwarden."
   exit 0
 fi
 
@@ -23,21 +23,21 @@ if [ -n "$missing" ]; then
 fi
 
 mkdir -p "$(dirname "$BIN")" "$APPS" "$ICONS"
-ln -sf "$HERE/bin/repoguard" "$BIN"
-cp "$HERE/repoguard/icons/hicolor/scalable/apps/$APP_ID.svg" "$ICONS/"
+ln -sf "$HERE/bin/gitwarden" "$BIN"
+cp "$HERE/gitwarden/icons/hicolor/scalable/apps/$APP_ID.svg" "$ICONS/"
 cat > "$APPS/$APP_ID.desktop" <<DESKTOP
 [Desktop Entry]
 Type=Application
-Name=RepoGuard
+Name=GitWarden
 Comment=Watches your GitHub repos for the git malware worm
-Exec="$HERE/bin/repoguard"
+Exec="$HERE/bin/gitwarden"
 Icon=$APP_ID
 Terminal=false
 Categories=Development;Security;
 StartupNotify=true
 DESKTOP
-python3 -I -c "import sys; sys.path.insert(0, '$HERE'); from repoguard import autostart; autostart.set_enabled(True)"
-echo "Installed. Open RepoGuard from the app menu, or run: repoguard"
+python3 -I -c "import sys; sys.path.insert(0, '$HERE'); from gitwarden import autostart; autostart.set_enabled(True)"
+echo "Installed. Open GitWarden from the app menu, or run: gitwarden"
 echo "It will also start in the top bar when you sign in (turn off in Settings)."
 gnome-extensions list --enabled 2>/dev/null | grep -qiE "appindicator" || \
   echo "Note: enable the 'AppIndicator' GNOME extension to see the top-bar icon."

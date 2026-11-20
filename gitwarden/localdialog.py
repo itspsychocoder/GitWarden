@@ -112,7 +112,7 @@ class LocalCleanDialog(Adw.Dialog):
             g = Adw.PreferencesGroup(
                 title="Remote branches",
                 description="These are copies of branches on GitHub (or another server). Clean them there: "
-                            "RepoGuard's Fix… on GitHub, or tell the repo's owner.")
+                            "GitWarden's Fix… on GitHub, or tell the repo's owner.")
             for b in pl["remote"]:
                 g.add(Adw.ActionRow(title=esc(b)))
             page.add(g)
@@ -146,7 +146,7 @@ class LocalCleanDialog(Adw.Dialog):
             except Exception as e:
                 res, err = None, f"{e!r}"
             GLib.idle_add(self._done, res, err)
-        threading.Thread(target=work, daemon=True, name="repoguard-local-clean").start()
+        threading.Thread(target=work, daemon=True, name="gitwarden-local-clean").start()
 
     def _done(self, res, err):
         self.nav.pop()

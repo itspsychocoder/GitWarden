@@ -1,4 +1,4 @@
-"""RepoGuard for Linux: top-bar status icon + window (GTK 4 / libadwaita)."""
+"""GitWarden: top-bar status icon + window (GTK 4 / libadwaita)."""
 import copy
 import json
 import os
@@ -53,7 +53,7 @@ def open_url(url):
     try:
         Gio.AppInfo.launch_default_for_uri(url, None)
     except GLib.Error as e:
-        print("RepoGuard: could not open", url, e.message, file=sys.stderr)
+        print("GitWarden: could not open", url, e.message, file=sys.stderr)
 
 
 # ====================================================================== controller
@@ -85,7 +85,7 @@ class Controller:
         self.tray = Tray(config.APP_ID, config.APP_NAME, ICON_DIR, on_activate=self.app.show_window)
         self.tray.on_host_change = lambda up: (self.refresh(), self.app.host_changed(up))
         if not Tray.available():
-            print("RepoGuard: no top-bar icon host right now (enable the 'Ubuntu AppIndicators' or "
+            print("GitWarden: no top-bar icon host right now (enable the 'Ubuntu AppIndicators' or "
                   "'AppIndicator and KStatusNotifierItem Support' GNOME extension); the icon appears "
                   "as soon as it is on.", file=sys.stderr)
         if Notify:
@@ -149,7 +149,7 @@ class Controller:
                     gh_err = f"Unexpected error: {e!r}"
             GLib.idle_add(self._done, gh_state if token else None, result, gh_err, local_state, local_err, pc_findings)
 
-        threading.Thread(target=work, name="repoguard-check", daemon=True).start()
+        threading.Thread(target=work, name="gitwarden-check", daemon=True).start()
 
     def _set_progress(self, msg):
         self.progress = msg
@@ -168,7 +168,7 @@ class Controller:
                 bad = [f for f in pc_findings if f["id"] in fresh]
                 self._notify("Signs of malware on this PC",
                              "\n".join(f"{f['title']}: {f['label']}" for f in bad[:4])
-                             + ("\n…" if len(bad) > 4 else "") + "\nOpen RepoGuard to review and fix.")
+                             + ("\n…" if len(bad) > 4 else "") + "\nOpen GitWarden to review and fix.")
         if gh_state is not None:
             gh_state["last_error"] = err
             if result and result.get("errors"):
@@ -207,10 +207,10 @@ class Controller:
     def _notify(self, title, body):
         if not self.settings.get("notify", True) or not Notify:
             return
-        n = Notify.Notification.new(title, body, os.path.join(STATUS_ICONS, "repoguard-alert.svg"))
+        n = Notify.Notification.new(title, body, os.path.join(STATUS_ICONS, "gitwarden-alert.svg"))
         n.set_urgency(Notify.Urgency.CRITICAL)
         try:
-            n.add_action("open", "Open RepoGuard", lambda *a: self.app.show_window())
+            n.add_action("open", "Open GitWarden", lambda *a: self.app.show_window())
         except Exception:
             pass
         n.connect("closed", lambda n: self._notes.remove(n) if n in self._notes else None)
@@ -224,14 +224,14 @@ class Controller:
         branches = sorted({i.split("|", 1)[0] for i in fresh_ids})
         title = "Malware pushed to GitHub" if len(branches) == 1 else f"Malware pushed to {len(branches)} GitHub branches"
         body = "\n".join(b.replace(":", " · ") for b in branches[:5]) + ("\n…" if len(branches) > 5 else "")
-        self._notify(title, body + "\nDon't pull these branches. Open RepoGuard to review.")
+        self._notify(title, body + "\nDon't pull these branches. Open GitWarden to review.")
 
     def alert_local(self, fresh_ids):
         places = sorted({i.split("|", 1)[0] for i in fresh_ids})
         home = os.path.expanduser("~")
         title = "Malware on this computer" if len(places) == 1 else f"Malware in {len(places)} folders on this computer"
         body = "\n".join(p.replace(home, "~") for p in places[:5]) + ("\n…" if len(places) > 5 else "")
-        self._notify(title, body + "\nDon't run or open these projects. Open RepoGuard to clean them.")
+        self._notify(title, body + "\nDon't run or open these projects. Open GitWarden to clean them.")
 
     # ---------------------------------------------------------------- derived status
     def counts(self):
@@ -249,27 +249,27 @@ class Controller:
         """(icon, headline, detail) for the icon, menu and window."""
         c = self.counts()
         if self.checking:
-            return "repoguard-busy-symbolic", "Checking…", self.progress
+            return "gitwarden-busy-symbolic", "Checking…", self.progress
         if c["pc_danger"]:
-            return ("repoguard-alert", f"Signs of malware on this PC ({c['pc_danger']})",
-                    "Something here keeps malware running. Review it in RepoGuard.")
+            return ("gitwarden-alert", f"Signs of malware on this PC ({c['pc_danger']})",
+                    "Something here keeps malware running. Review it in GitWarden.")
         if c["local_danger"]:
             n = c["local_places"]
-            return ("repoguard-alert", f"Malware on this computer ({n} folder{'s' if n != 1 else ''})",
-                    "Don't run or open these projects. Clean them in RepoGuard.")
+            return ("gitwarden-alert", f"Malware on this computer ({n} folder{'s' if n != 1 else ''})",
+                    "Don't run or open these projects. Clean them in GitWarden.")
         if c["danger"]:
-            return ("repoguard-alert", f"Malware on {c['branches']} GitHub branch{'es' if c['branches'] != 1 else ''}",
+            return ("gitwarden-alert", f"Malware on {c['branches']} GitHub branch{'es' if c['branches'] != 1 else ''}",
                     f"{c['danger']} dangerous file{'s' if c['danger'] != 1 else ''}. Don't pull these branches.")
         if self.token_problem:
-            return "repoguard-off-symbolic", "GitHub not connected", self.token_problem
+            return "gitwarden-off-symbolic", "GitHub not connected", self.token_problem
         if self.state.get("last_error"):
-            return "repoguard-off-symbolic", "Last check failed", self.state["last_error"]
+            return "gitwarden-off-symbolic", "Last check failed", self.state["last_error"]
         if self.settings.get("paused"):
-            return "repoguard-paused-symbolic", "Watching paused", "Turn it back on from the menu."
+            return "gitwarden-paused-symbolic", "Watching paused", "Turn it back on from the menu."
         if not self.state.get("last_check") and not self.local.get("last_check"):
-            return "repoguard-busy-symbolic", "Not checked yet", "The first check starts in a moment."
+            return "gitwarden-busy-symbolic", "Not checked yet", "The first check starts in a moment."
         extra = f" · {c['review']} file{'s' if c['review'] != 1 else ''} worth a look" if c["review"] else ""
-        return "repoguard-ok-symbolic", "All clear", f"No malware found{extra}"
+        return "gitwarden-ok-symbolic", "All clear", f"No malware found{extra}"
 
     # ---------------------------------------------------------------- UI sync
     def refresh(self):
@@ -305,7 +305,7 @@ class Controller:
                 items.append({"label": "…and more", "action": self.app.show_window})
         items += [{"separator": True},
                   {"label": "Check now", "enabled": not self.checking, "action": self.check_now},
-                  {"label": "Open RepoGuard…", "action": self.app.show_window},
+                  {"label": "Open GitWarden…", "action": self.app.show_window},
                   {"label": "Pause watching", "toggle": "checkmark", "state": bool(self.settings.get("paused")),
                    "action": self.toggle_pause},
                   {"separator": True},
@@ -324,7 +324,7 @@ class Window(Adw.ApplicationWindow):
     def __init__(self, app, ctl):
         super().__init__(application=app, title=config.APP_NAME, default_width=760, default_height=640)
         self.ctl = ctl
-        # With a top-bar icon, closing the window keeps RepoGuard running there; without one, it quits.
+        # With a top-bar icon, closing the window keeps GitWarden running there; without one, it quits.
         self.connect("close-request", self._on_close)
 
         self.stack = Adw.ViewStack()
@@ -392,7 +392,7 @@ class Window(Adw.ApplicationWindow):
 
         if ctl.token_problem:
             self._token_group(self._group("Connect GitHub",
-                                          "RepoGuard needs read access to your repos to watch new commits."))
+                                          "GitWarden needs read access to your repos to watch new commits."))
 
         findings = ctl.state["findings"]
         danger = {k: [f for f in v if f["severity"] == "danger"] for k, v in findings.items()}
@@ -626,7 +626,7 @@ class Window(Adw.ApplicationWindow):
         notif.connect("notify::active", on_notify)
         g.add(notif)
 
-        auto = Adw.SwitchRow(title="Start at login", subtitle="Show the RepoGuard icon in the top bar when you sign in",
+        auto = Adw.SwitchRow(title="Start at login", subtitle="Show the GitWarden icon in the top bar when you sign in",
                              active=autostart.enabled())
         auto.connect("notify::active", lambda row, _: autostart.set_enabled(row.get_active()))
         g.add(auto)
@@ -639,7 +639,7 @@ class Window(Adw.ApplicationWindow):
             title="Git protection",
             description="Checks what git fetch, pull and clone bring in, before your files change, in the terminal, "
                         "VS Code and any other git app. Your own commits aren't checked. To let one command through "
-                        "on purpose: REPOGUARD_ALLOW_FETCH=1 git …")
+                        "on purpose: GITWARDEN_ALLOW_FETCH=1 git …")
         self.protect_row = Adw.SwitchRow(title="Block infected pulls and clones", active=protect.status() == "on")
         self.protect_row.connect("notify::active", self._on_protect)
         pg.add(self.protect_row)
@@ -775,7 +775,7 @@ class Window(Adw.ApplicationWindow):
             ok, msg = protect.install()
             if not ok and protect.status() == "other":
                 d = Adw.AlertDialog(heading="Replace git's hooks folder?",
-                                    body=GLib.markup_escape_text(msg) + "\n\nRepoGuard runs each repo's own hooks, "
+                                    body=GLib.markup_escape_text(msg) + "\n\nGitWarden runs each repo's own hooks, "
                                     "but hooks from that folder would stop running.")
                 d.add_response("cancel", "Cancel")
                 d.add_response("replace", "Replace")
@@ -802,7 +802,7 @@ class Window(Adw.ApplicationWindow):
 
     def _confirm_forget(self):
         d = Adw.AlertDialog(heading="Forget the saved GitHub token?",
-                            body="RepoGuard stops watching GitHub until you paste a token again.")
+                            body="GitWarden stops watching GitHub until you paste a token again.")
         d.add_response("cancel", "Cancel")
         d.add_response("forget", "Forget token")
         d.set_response_appearance("forget", Adw.ResponseAppearance.DESTRUCTIVE)
@@ -831,7 +831,7 @@ class App(Adw.Application):
         Adw.Application.do_startup(self)
         Gtk.IconTheme.get_for_display(Gdk.Display.get_default()).add_search_path(ICON_DIR)
         self.hold()  # keep running in the top bar with no window open
-        protect.refresh()  # keep the git hooks pointing at this copy of RepoGuard
+        protect.refresh()  # keep the git hooks pointing at this copy of GitWarden
         self.ctl = Controller(self)
         self.ctl.start()
 
@@ -843,7 +843,7 @@ class App(Adw.Application):
 
     def host_changed(self, up):
         if not up and (self.win is None or not self.win.get_visible()):
-            self.show_window()  # the icon went away: show the window so RepoGuard isn't invisible
+            self.show_window()  # the icon went away: show the window so GitWarden isn't invisible
 
     def show_window(self):
         if self.win is None:

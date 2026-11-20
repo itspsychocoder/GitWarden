@@ -1,8 +1,8 @@
 import os
 import unittest
 
-from repoguard import fix, github
-from repoguard.clean import DELETE, EDIT, MANUAL
+from gitwarden import fix, github
+from gitwarden.clean import DELETE, EDIT, MANUAL
 from tests.helpers import LOADER, MockGitHub, git, infect, tmpdir, write
 
 
@@ -11,8 +11,8 @@ class FixBase(unittest.TestCase):
         self.tmp = tmpdir()
         self.root = self.tmp.name
         for k in ("STATE", "CONFIG"):
-            os.environ[f"REPOGUARD_{k}"] = os.path.join(self.root, k.lower())
-            os.makedirs(os.environ[f"REPOGUARD_{k}"])
+            os.environ[f"GITWARDEN_{k}"] = os.path.join(self.root, k.lower())
+            os.makedirs(os.environ[f"GITWARDEN_{k}"])
         self.mock = MockGitHub()
         self.fix_gh = github.GitHub("fix-token", api=self.mock.url)
         self.watch_gh = github.GitHub("test-token", api=self.mock.url)
@@ -48,7 +48,7 @@ class CommitFixTest(FixBase):
         self.assertEqual(git(self.repo.bare, "rev-parse", "feature/x").decode().strip(), new)
         self.assertEqual(git(self.repo.bare, "rev-parse", new + "^").decode().strip(), old_head, "no force-push")
         self.assertEqual(self.show(self.repo, new, "postcss.config.mjs"), b"export default { plugins: {} };\n")
-        self.assertIn(b"Remove malware (RepoGuard)", git(self.repo.bare, "log", "-1", "--format=%B", new))
+        self.assertIn(b"Remove malware (GitWarden)", git(self.repo.bare, "log", "-1", "--format=%B", new))
         self.assertEqual(self.findings(), {})
 
     def test_watch_token_cannot_fix(self):
@@ -122,7 +122,7 @@ class HistoryRewriteTest(FixBase):
             rw.close()
         bare = self.repo.bare
         # every commit on every branch and tag is clean now
-        from repoguard.detect import Detector
+        from gitwarden.detect import Detector
         det = Detector()
         for c in git(bare, "rev-list", "--all").decode().split():
             for line in git(bare, "ls-tree", "-r", c).decode().splitlines():

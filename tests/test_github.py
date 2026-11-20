@@ -1,7 +1,7 @@
 import os
 import unittest
 
-from repoguard import github
+from gitwarden import github
 from tests.helpers import MockGitHub, infect, git, tmpdir
 
 
@@ -9,10 +9,10 @@ class WatchTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tmpdir()
         self.root = self.tmp.name
-        os.environ["REPOGUARD_STATE"] = os.path.join(self.root, "state")
-        os.environ["REPOGUARD_CONFIG"] = os.path.join(self.root, "config")
-        os.makedirs(os.environ["REPOGUARD_STATE"])
-        os.makedirs(os.environ["REPOGUARD_CONFIG"])
+        os.environ["GITWARDEN_STATE"] = os.path.join(self.root, "state")
+        os.environ["GITWARDEN_CONFIG"] = os.path.join(self.root, "config")
+        os.makedirs(os.environ["GITWARDEN_STATE"])
+        os.makedirs(os.environ["GITWARDEN_CONFIG"])
         self.mock = MockGitHub()
         self.gh = github.GitHub("test-token", api=self.mock.url)
 

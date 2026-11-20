@@ -1,7 +1,7 @@
 """Fix what the PC check found, with a backup of everything first and an Undo.
 
 Order: stop dangerous processes (after checking the PID still runs the same program), then change files.
-Everything that changes is copied to ~/.local/state/repoguard/quarantine/<time>-this-pc/ (never executable)
+Everything that changes is copied to ~/.local/state/gitwarden/quarantine/<time>-this-pc/ (never executable)
 and listed in undo.json, so restore() can put it back. Stopped processes can't be restarted by Undo.
 """
 import json
@@ -14,7 +14,7 @@ import time
 
 from . import config, pc
 
-SYSTEMCTL = os.environ.get("REPOGUARD_SYSTEMCTL") or "systemctl"
+SYSTEMCTL = os.environ.get("GITWARDEN_SYSTEMCTL") or "systemctl"
 
 
 def _qdir():
@@ -85,7 +85,7 @@ def apply(findings):
     for f in [f for f in findings if (f.get("fix") or {}).get("type") == "kill"]:
         fx = f["fix"]
         if fx["pid"] in protected:
-            skipped.append((f["title"], "RepoGuard never stops itself or the programs that started it"))
+            skipped.append((f["title"], "GitWarden never stops itself or the programs that started it"))
             continue
         if not _same_process(fx["pid"], fx["exe"], fx["cmd"]):
             skipped.append((f["title"], "already stopped (or the ID is now used by another program)"))
@@ -120,7 +120,7 @@ def apply(findings):
                     continue
                 backup = _stash(qdir, path)
                 mode = os.stat(path).st_mode
-                tmp = path + ".repoguard-tmp"
+                tmp = path + ".gitwarden-tmp"
                 with open(tmp, "w", encoding="utf8", errors="surrogateescape", newline="") as fh:
                     fh.write("".join(keep))
                 os.chmod(tmp, stat.S_IMODE(mode))

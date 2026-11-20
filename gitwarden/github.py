@@ -16,7 +16,7 @@ import urllib.request
 from . import config
 from .detect import Detector, Hit, worst
 
-API = os.environ.get("REPOGUARD_GITHUB_API", "https://api.github.com")
+API = os.environ.get("GITWARDEN_GITHUB_API", "https://api.github.com")
 BLOB_BUDGET = 1500        # max file downloads per check; the rest continue next time
 MIN_RATE_LEFT = 200       # stop early to leave API headroom for you and other tools
 MAX_CACHE = 300_000
@@ -47,7 +47,7 @@ class GitHub:
         req.add_header("Authorization", "Bearer " + self.token)
         req.add_header("Accept", "application/vnd.github+json")
         req.add_header("X-GitHub-Api-Version", "2022-11-28")
-        req.add_header("User-Agent", "RepoGuard-Linux")
+        req.add_header("User-Agent", "GitWarden")
         if data is not None:
             req.add_header("Content-Type", "application/json")
         if etag:
@@ -99,7 +99,7 @@ class GitHub:
         req = urllib.request.Request(url)
         req.add_header("Authorization", "Bearer " + self.token)
         req.add_header("Accept", "application/vnd.github+json")
-        req.add_header("User-Agent", "RepoGuard-Linux")
+        req.add_header("User-Agent", "GitWarden")
         self.calls += 1
         try:
             resp = _NO_REDIRECT.open(req, timeout=60)
@@ -114,7 +114,7 @@ class GitHub:
                     or host == urllib.parse.urlparse(self.api).hostname):
                 raise GitHubError(0, f"unexpected archive location: {host}") from None
             try:
-                resp = urllib.request.urlopen(urllib.request.Request(loc, headers={"User-Agent": "RepoGuard-Linux"}),
+                resp = urllib.request.urlopen(urllib.request.Request(loc, headers={"User-Agent": "GitWarden"}),
                                               timeout=120)
             except (urllib.error.URLError, OSError) as e2:
                 raise GitHubError(0, f"network error: {e2}") from None

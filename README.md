@@ -1,4 +1,4 @@
-# RepoGuard for Linux
+# GitWarden
 
 A top-bar app for GNOME that watches **every branch of every GitHub repo you can push to** for the git
 worm that force-pushes forged commits with hidden loader code: `init` files, code hidden far off-screen
@@ -8,7 +8,7 @@ Ethereum-based loader. When new malware shows up it pops a desktop alert and the
 Inspired by [repo-guard-windows](https://github.com/muazkhalid936/repo-guard-windows) by Muaz Khalid;
 written from scratch for Linux.
 
-RepoGuard reads files and git objects as data. It never runs anything it scans.
+GitWarden reads files and git objects as data. It never runs anything it scans.
 
 ## Top-bar icon
 
@@ -21,7 +21,7 @@ RepoGuard reads files and git objects as data. It never runs anything it scans.
 | shield – | GitHub not connected, or the last check failed |
 
 Click it for a quick glance (status, last check, infected branches) and actions: **Check now**,
-**Open RepoGuard…**, **Pause watching**, **Quit**.
+**Open GitWarden…**, **Pause watching**, **Quit**.
 
 ## Install
 
@@ -29,7 +29,7 @@ Needs Ubuntu/Debian with GNOME (tested on Ubuntu 26.04, GNOME 50) and the system
 `python3-gi gir1.2-gtk-4.0 gir1.2-adw-1 git` (already there on Ubuntu desktop). Nothing from pip.
 
 ```
-./install.sh            # `repoguard` command, app-menu entry, start at login
+./install.sh            # `gitwarden` command, app-menu entry, start at login
 ./install.sh --uninstall
 ```
 
@@ -46,21 +46,21 @@ This worm spreads by stealing credentials that can push, so the always-running a
 | Permissions | Contents: **Read** · Metadata: Read | Contents: **Read and write** · Workflows: Read and write · Metadata: Read |
 | Repos | All repositories | Only the repos you are cleaning |
 | Expiry | 90 days | 7 days (delete it right after the fix) |
-| Stored | `~/.config/repoguard/github-token` (mode 600) | Never written to disk: asked for at fix time, kept in memory |
+| Stored | `~/.config/gitwarden/github-token` (mode 600) | Never written to disk: asked for at fix time, kept in memory |
 
 Create both at GitHub → Settings → Developer settings → Fine-grained tokens. Paste the watch token in
-RepoGuard → Settings.
+GitWarden → Settings.
 
-A force-push still fails if the branch has protection or a ruleset that disallows force pushes; RepoGuard
+A force-push still fails if the branch has protection or a ruleset that disallows force pushes; GitWarden
 checks this first and tells you which setting to change. Fine-grained tokens can't reach repos owned by
 other people where you are only a collaborator.
 
 ## Use from the terminal
 
 ```
-repoguard               # open the app
-repoguard --background  # top-bar icon only
-repoguard check         # one GitHub check, prints findings (exit 1 if malware)
+gitwarden               # open the app
+gitwarden --background  # top-bar icon only
+gitwarden check         # one GitHub check, prints findings (exit 1 if malware)
 ```
 
 ## How the GitHub watch works
@@ -78,7 +78,7 @@ disk, every local and remote-tracking branch of each git repo, each repo's `.git
 size and time, git blobs by ID, so later checks take a fraction of a second.
 
 **Review & clean…** shows each file it will delete or cut, with the exact code. Then it:
-- backs up every file it touches to `~/.local/state/repoguard/quarantine/<time>-<folder>/` (not executable);
+- backs up every file it touches to `~/.local/state/gitwarden/quarantine/<time>-<folder>/` (not executable);
 - cleans the files on disk and removes the dangerous `.git/config` lines;
 - optionally commits the cleaned files on the checked-out branch (only those files; the repo's hooks off);
 - adds a cleanup commit on other infected local branches without checking them out.
@@ -101,24 +101,24 @@ programs, global git config, `~/.npmrc`, VS Code's `task.allowAutomaticTasks`, a
   suspicious is only worth a look and never stopped.
 
 **Review & fix…** ticks the malware signs (not the "worth a look" items). It stops dangerous programs (after
-checking the process ID still runs the same program; never RepoGuard itself or what started it), then backs
+checking the process ID still runs the same program; never GitWarden itself or what started it), then backs
 up and removes files, lines, crontab entries and user services. Undo puts the files back; stopped programs
 stay stopped. Anything that needs admin rights is listed with the command to run.
 
 ## Blocking infected pulls
 
-Settings → **Block infected pulls and clones** (or `repoguard protect on`). RepoGuard sets git's global
-`core.hooksPath` to `~/.local/share/repoguard/githooks`. Its `reference-transaction` hook reads the objects a
+Settings → **Block infected pulls and clones** (or `gitwarden protect on`). GitWarden sets git's global
+`core.hooksPath` to `~/.local/share/gitwarden/githooks`. Its `reference-transaction` hook reads the objects a
 fetch, pull or clone just downloaded (only the new ones) and cancels the update if any file is malware, so
 your branches and files never change. It works for every git app: terminal, VS Code, GitHub Desktop.
 
 - Every other hook passes through to the repo's own `.git/hooks`, so Git LFS, pre-commit etc. keep working.
 - Your own commits aren't checked.
 - Let one command through on purpose (e.g. to clone an infected repo to clean it):
-  `REPOGUARD_ALLOW_FETCH=1 git clone …`
+  `GITWARDEN_ALLOW_FETCH=1 git clone …`
 - Not covered: repos that set their own `core.hooksPath` (husky), and `git fetch origin x:y` straight into a
   local branch.
-- `repoguard protect off` puts git back as it was.
+- `gitwarden protect off` puts git back as it was.
 
 ## Fixing malware on GitHub
 
@@ -129,7 +129,7 @@ is pushed. You type the repository name to confirm.
   malware.
 - **Rewrite history**: every commit on every branch (and lightweight tags) is rewritten so the malware never
   existed; commits before the infection keep their IDs, and authors, dates and messages stay the same. First a
-  full `git clone --mirror` backup goes to `~/.local/state/repoguard/backups/`. The force-push is atomic and
+  full `git clone --mirror` backup goes to `~/.local/state/gitwarden/backups/`. The force-push is atomic and
   uses `--force-with-lease`, so if anyone pushed after your preview nothing changes. Afterwards everyone must
   re-clone, and old commits can stay reachable on GitHub by ID until GitHub Support purges them.
 

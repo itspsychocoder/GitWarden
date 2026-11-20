@@ -211,7 +211,7 @@ class FixDialog(Adw.Dialog):
                 done(res)
             return False
 
-        threading.Thread(target=thread, daemon=True, name="repoguard-fix").start()
+        threading.Thread(target=thread, daemon=True, name="gitwarden-fix").start()
 
     def _error(self, msg):
         sp = Adw.StatusPage(icon_name="dialog-error-symbolic", title="Nothing was changed on GitHub",
@@ -383,13 +383,13 @@ class FixDialog(Adw.Dialog):
         self._forget()
         page = Adw.PreferencesPage()
         sp = Adw.StatusPage(icon_name="emblem-ok-symbolic", title="Malware removed on GitHub",
-                            description="RepoGuard will check the repo again now.")
+                            description="GitWarden will check the repo again now.")
         sg = Adw.PreferencesGroup()
         sg.add(sp)
         page.add(sg)
 
         g = Adw.PreferencesGroup(title="Now do this")
-        row = Adw.ActionRow(title="Delete the fix token", subtitle="RepoGuard has already forgotten it.")
+        row = Adw.ActionRow(title="Delete the fix token", subtitle="GitWarden has already forgotten it.")
         b = Gtk.Button(label="Open GitHub tokens", valign=Gtk.Align.CENTER)
         b.add_css_class("suggested-action")
         b.connect("clicked", lambda *_: open_url(fix.TOKEN_LIST_URL))

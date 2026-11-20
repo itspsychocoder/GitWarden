@@ -1,5 +1,5 @@
 """Shared test helpers. The 'malware' is harmless look-alike text, assembled at runtime so that this
-file itself never matches RepoGuard's rules."""
+file itself never matches GitWarden's rules."""
 import base64
 import json
 import os

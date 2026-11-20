@@ -1,25 +1,25 @@
-"""Where RepoGuard keeps its settings and state (XDG folders), and the GitHub token."""
+"""Where GitWarden keeps its settings and state (XDG folders), and the GitHub token."""
 import json
 import os
 import shutil
 import subprocess
 
-APP_ID = "io.github.RepoGuardLinux"
-APP_NAME = "RepoGuard"
+APP_ID = "io.github.itspsychocoder.GitWarden"
+APP_NAME = "GitWarden"
 
 
 def _xdg(var, default):
-    d = os.path.join(os.environ.get(var) or os.path.expanduser(default), "repoguard")
+    d = os.path.join(os.environ.get(var) or os.path.expanduser(default), "gitwarden")
     os.makedirs(d, mode=0o700, exist_ok=True)
     return d
 
 
 def config_dir():
-    return os.environ.get("REPOGUARD_CONFIG") or _xdg("XDG_CONFIG_HOME", "~/.config")
+    return os.environ.get("GITWARDEN_CONFIG") or _xdg("XDG_CONFIG_HOME", "~/.config")
 
 
 def state_dir():
-    return os.environ.get("REPOGUARD_STATE") or _xdg("XDG_STATE_HOME", "~/.local/state")
+    return os.environ.get("GITWARDEN_STATE") or _xdg("XDG_STATE_HOME", "~/.local/state")
 
 
 def _write_private(path, text):
@@ -67,10 +67,10 @@ def token_path():
 
 
 def log(msg):
-    """Append one line to ~/.local/state/repoguard/repoguard.log (never logs token values)."""
+    """Append one line to ~/.local/state/gitwarden/gitwarden.log (never logs token values)."""
     import time
     try:
-        with open(os.path.join(state_dir(), "repoguard.log"), "a", encoding="utf8") as fh:
+        with open(os.path.join(state_dir(), "gitwarden.log"), "a", encoding="utf8") as fh:
             fh.write(time.strftime("%Y-%m-%d %H:%M:%S ") + msg + "\n")
     except OSError:
         pass
@@ -91,8 +91,8 @@ def forget_token(reason="Forget saved token pressed"):
 
 def github_token():
     """(token, source) or (None, reason). Order: env var, saved token, GitHub CLI login."""
-    if os.environ.get("REPOGUARD_GITHUB_TOKEN"):
-        return os.environ["REPOGUARD_GITHUB_TOKEN"], "environment"
+    if os.environ.get("GITWARDEN_GITHUB_TOKEN"):
+        return os.environ["GITWARDEN_GITHUB_TOKEN"], "environment"
     try:
         with open(token_path(), encoding="utf8") as fh:
             t = fh.read().strip()
@@ -110,4 +110,4 @@ def github_token():
         except (OSError, subprocess.TimeoutExpired):
             pass
         return None, "Not signed in to the GitHub CLI (run: gh auth login), and no token saved."
-    return None, "No GitHub token yet. Paste a token in RepoGuard, or install the GitHub CLI and run: gh auth login"
+    return None, "No GitHub token yet. Paste a token in GitWarden, or install the GitHub CLI and run: gh auth login"

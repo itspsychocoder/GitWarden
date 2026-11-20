@@ -15,11 +15,11 @@ import subprocess
 
 from .detect import DANGER, REVIEW, Detector
 
-HOME = os.environ.get("REPOGUARD_PC_HOME") or os.path.expanduser("~")
-ETC = os.environ.get("REPOGUARD_PC_ETC") or "/etc"
-PROC = os.environ.get("REPOGUARD_PC_PROC") or "/proc"
-TEMP_DIRS = (os.environ.get("REPOGUARD_PC_TMP") or "/tmp:/var/tmp:/dev/shm").split(":")
-CRONTAB = os.environ.get("REPOGUARD_CRONTAB") or "crontab"
+HOME = os.environ.get("GITWARDEN_PC_HOME") or os.path.expanduser("~")
+ETC = os.environ.get("GITWARDEN_PC_ETC") or "/etc"
+PROC = os.environ.get("GITWARDEN_PC_PROC") or "/proc"
+TEMP_DIRS = (os.environ.get("GITWARDEN_PC_TMP") or "/tmp:/var/tmp:/dev/shm").split(":")
+CRONTAB = os.environ.get("GITWARDEN_CRONTAB") or "crontab"
 
 # Commands that fetch code and run it, run encoded code, or open a shell for someone else.
 BAD = [
@@ -46,9 +46,9 @@ REMOTE_TOOLS = re.compile(r"\b(?:anydesk|teamviewer|rustdesk|screenconnect|mesha
 TEMP_SKIP = re.compile(r"^(?:systemd-private-|snap-private-tmp|\.X\d|\.X11-unix|\.ICE-unix|\.XIM-unix|\.font-unix|"
                        r"\.Test-unix|claude-|tracker-extract|org\.chromium\.|\.org\.chromium\.|node-compile-cache|"
                        r"pulse-|ssh-[A-Za-z0-9]+$|gdm|lttng-|snap\.|mongodb-\d+\.sock|tmux-\d+|vscode-|"
-                       r"\.com\.google\.Chrome|com\.google\.Chrome|rg-test-|rg-ui-|repoguard-)")
+                       r"\.com\.google\.Chrome|com\.google\.Chrome|rg-test-|rg-ui-|gitwarden-)")
 SCRIPT_EXT = re.compile(r"\.(?:sh|bash|py|js|mjs|cjs|pl|rb|php|ps1|bat|vbs)$", re.I)
-OWN_AUTOSTART = "io.github.RepoGuardLinux.desktop"
+OWN_AUTOSTART = "io.github.itspsychocoder.GitWarden.desktop"
 
 
 TEMP_PATH = re.compile(r"(?:^|[\s'\"=:])((?:/tmp|/var/tmp|/dev/shm)/[^\s'\";|&]+)")
@@ -168,7 +168,7 @@ def check_systemd():
                 out.append(finding("systemd", path, f"Service {name}", cmd, *j, fix=fix))
                 break
         else:
-            if mine and not name.startswith("repoguard"):
+            if mine and not name.startswith("gitwarden"):
                 out.append(finding("systemd", path, f"Your own service {name}",
                                    next(_exec_lines(text), "(no command)"), REVIEW,
                                    "Starts automatically for your user. Fine if you set it up.",
@@ -325,7 +325,7 @@ MINER_EXE = re.compile(r"^(?:xmrig|kdevtmpfsi|kinsing|minerd|cpuminer|nbminer|t-
 
 
 def _protected_pids():
-    """RepoGuard itself and every process that started it (your terminal, your session): never offered."""
+    """GitWarden itself and every process that started it (your terminal, your session): never offered."""
     out, pid = {1}, os.getpid()
     for _ in range(64):
         out.add(pid)

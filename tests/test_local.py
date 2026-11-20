@@ -2,7 +2,7 @@
 import os
 import unittest
 
-from repoguard import local, localclean
+from gitwarden import local, localclean
 from tests.helpers import LOADER, PAD, clean_project, git, infect, tmpdir, write
 
 
@@ -20,10 +20,10 @@ class LocalTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tmpdir()
         self.root = self.tmp.name
-        os.environ["REPOGUARD_STATE"] = os.path.join(self.root, "state")
-        os.environ["REPOGUARD_CONFIG"] = os.path.join(self.root, "config")
-        os.makedirs(os.environ["REPOGUARD_STATE"])
-        os.makedirs(os.environ["REPOGUARD_CONFIG"])
+        os.environ["GITWARDEN_STATE"] = os.path.join(self.root, "state")
+        os.environ["GITWARDEN_CONFIG"] = os.path.join(self.root, "config")
+        os.makedirs(os.environ["GITWARDEN_STATE"])
+        os.makedirs(os.environ["GITWARDEN_CONFIG"])
         self.code = os.path.join(self.root, "code")
         self.marker = os.path.join(self.root, "PWNED")
         # repo: clean main, infected commit on main, infected "feature" branch, infected files on disk,
@@ -112,7 +112,7 @@ class LocalTest(unittest.TestCase):
         self.assertIn(b"st = status", cfg)
         for b in ("main", "feature"):
             self.assertEqual(git(self.repo, "rev-parse", f"{b}^").decode().strip(), heads_before[b])
-            self.assertIn(b"Remove malware (RepoGuard)", git(self.repo, "log", "-1", "--format=%B", b))
+            self.assertIn(b"Remove malware (GitWarden)", git(self.repo, "log", "-1", "--format=%B", b))
         self.assertEqual(git(self.repo, "log", "-1", "--format=%an", "feature").decode().strip(), "Dev")
         self.assertEqual(git(self.repo, "status", "--porcelain").decode().strip(), "", "working tree matches commit")
         s2 = self.scan()

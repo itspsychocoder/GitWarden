@@ -1,6 +1,6 @@
 """Git protection: global git hooks that cancel a fetch, pull or clone when the incoming code has malware.
 
-`on` writes hooks into ~/.local/share/repoguard/githooks and points git's global core.hooksPath at them.
+`on` writes hooks into ~/.local/share/gitwarden/githooks and points git's global core.hooksPath at them.
 Because a global hooks folder hides each repo's own .git/hooks, every hook here also runs the repo's own
 hook of the same name, so Git LFS, pre-commit and the like keep working.
 
@@ -17,7 +17,7 @@ import sys
 from . import config
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-MARKER = "# RepoGuard git protection"
+MARKER = "# GitWarden git protection"
 
 # Every hook git knows; all of them pass through to the repo's own hook.
 ALL_HOOKS = [
@@ -30,7 +30,7 @@ ALL_HOOKS = [
 ]
 
 PASS_THROUGH = f"""#!/bin/sh
-{MARKER}: runs this repo's own hook of the same name, as git would without RepoGuard.
+{MARKER}: runs this repo's own hook of the same name, as git would without GitWarden.
 own="$(git rev-parse --git-common-dir 2>/dev/null)/hooks/$(basename "$0")"
 [ -x "$own" ] && exec "$own" "$@"
 exit 0
@@ -40,11 +40,11 @@ REFERENCE_TRANSACTION = f"""#!/bin/sh
 {MARKER}: checks what a fetch, pull or clone brings in, before any branch moves to it.
 # Exiting non-zero while the update is "prepared" cancels it, so your files never change.
 # Let one command through on purpose (e.g. to clone an infected repo to clean it):
-#   REPOGUARD_ALLOW_FETCH=1 git ...
+#   GITWARDEN_ALLOW_FETCH=1 git ...
 input=$(cat)
 own="$(git rev-parse --git-common-dir 2>/dev/null)/hooks/reference-transaction"
 run_own() {{ [ -x "$own" ] || return 0; printf '%s\\n' "$input" | "$own" "$@"; }}
-if [ "$1" != prepared ] || [ -n "$REPOGUARD_ALLOW_FETCH" ]; then
+if [ "$1" != prepared ] || [ -n "$GITWARDEN_ALLOW_FETCH" ]; then
   run_own "$@"
   exit $?
 fi
@@ -66,12 +66,12 @@ if [ -n "$tips" ]; then
   status=$?
   if [ "$status" -eq 1 ]; then
     {{
-      echo "RepoGuard: this fetch/pull/clone was cancelled. Your files and branches were not changed."
+      echo "GitWarden: this fetch/pull/clone was cancelled. Your files and branches were not changed."
       echo "Tell whoever pushed it that their machine is infected. To fetch it anyway (to clean it):"
-      echo "  REPOGUARD_ALLOW_FETCH=1 git <your command>"
+      echo "  GITWARDEN_ALLOW_FETCH=1 git <your command>"
     }} >&2
     command -v notify-send >/dev/null 2>&1 && \\
-      notify-send -u critical -a RepoGuard "Git pull blocked: malware" \\
+      notify-send -u critical -a GitWarden "Git pull blocked: malware" \\
       "Incoming code in $(basename "$(git rev-parse --show-toplevel 2>/dev/null || pwd)") has malware. Nothing was changed." \\
       >/dev/null 2>&1 &
     exit 1
@@ -82,8 +82,8 @@ run_own "$@"
 
 
 def hooks_dir():
-    d = os.path.join(os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share"), "repoguard", "githooks")
-    return os.environ.get("REPOGUARD_HOOKS_DIR") or d
+    d = os.path.join(os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share"), "gitwarden", "githooks")
+    return os.environ.get("GITWARDEN_HOOKS_DIR") or d
 
 
 def _git(*args):
@@ -133,7 +133,7 @@ def install(force=False):
     """Returns (ok, message)."""
     cur = current()
     if cur and not _same(cur, hooks_dir()) and not force:
-        return False, (f"Git already uses hooks from {cur} for every repo. Turning RepoGuard's protection on "
+        return False, (f"Git already uses hooks from {cur} for every repo. Turning GitWarden's protection on "
                        "would replace that setting.")
     write_hooks(hooks_dir())
     rc, _, err = _git("config", "--global", "core.hooksPath", hooks_dir())
@@ -151,6 +151,6 @@ def uninstall():
 
 
 def refresh():
-    """Rewrite the hooks if protection is on (e.g. after RepoGuard moved or was updated)."""
+    """Rewrite the hooks if protection is on (e.g. after GitWarden moved or was updated)."""
     if status() == "on":
         write_hooks(hooks_dir())

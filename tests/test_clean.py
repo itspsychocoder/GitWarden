@@ -1,8 +1,8 @@
 import json
 import unittest
 
-from repoguard.clean import DELETE, EDIT, KEEP, MANUAL, clean
-from repoguard.detect import Detector
+from gitwarden.clean import DELETE, EDIT, KEEP, MANUAL, clean
+from gitwarden.detect import Detector
 from tests.helpers import LOADER, NPM_LOADER, PAD
 
 

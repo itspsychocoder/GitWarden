@@ -23,8 +23,8 @@ from .github import GitHub, GitHubError
 
 FIX_TOKEN_URL = "https://github.com/settings/personal-access-tokens/new"
 TOKEN_LIST_URL = "https://github.com/settings/personal-access-tokens"
-GIT_URL = os.environ.get("REPOGUARD_GIT_URL", "https://github.com/{owner}/{name}.git")
-COMMIT_MESSAGE = "Remove malware (RepoGuard)"
+GIT_URL = os.environ.get("GITWARDEN_GIT_URL", "https://github.com/{owner}/{name}.git")
+COMMIT_MESSAGE = "Remove malware (GitWarden)"
 
 
 def friendly(err):
@@ -255,7 +255,7 @@ class HistoryRewrite:
         if p.returncode:
             shutil.rmtree(self.backup, ignore_errors=True)
             raise GitError(friendly(p.stderr.decode("utf8", "replace").strip()))
-        self._tmp = tempfile.mkdtemp(prefix="repoguard-rewrite-")
+        self._tmp = tempfile.mkdtemp(prefix="gitwarden-rewrite-")
         self.work = os.path.join(self._tmp, "work.git")
         p = subprocess.run(["git", "clone", "--bare", "--quiet", "--no-local", self.backup, self.work],
                            capture_output=True, env=self.env, cwd=self._tmp)
@@ -471,9 +471,9 @@ def list_backups():
 
 
 def delete_backup(path):
-    """Delete one history-rewrite backup. Refuses anything outside RepoGuard's backup folder."""
+    """Delete one history-rewrite backup. Refuses anything outside GitWarden's backup folder."""
     if not _inside(path, backup_root()) or not path.endswith(".git"):
-        raise ValueError(f"not a RepoGuard backup: {path}")
+        raise ValueError(f"not a GitWarden backup: {path}")
     shutil.rmtree(path)
 
 

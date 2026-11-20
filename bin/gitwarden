@@ -1,0 +1,9 @@
+#!/usr/bin/python3 -I
+"""Launcher: runs GitWarden from this folder with the system Python (it needs python3-gi, GTK 4, libadwaita)."""
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
+from gitwarden.__main__ import main  # noqa: E402
+
+sys.exit(main())

@@ -3,7 +3,7 @@
 plan()    works out, for one folder, what would change: files on disk (delete / cut / leave for you),
           infected local branches (a cleanup commit made without checking them out), and dangerous
           lines in the repo's .git/config. Nothing is changed.
-apply()   backs up every file it touches to ~/.local/state/repoguard/quarantine/<time>/, then changes them,
+apply()   backs up every file it touches to ~/.local/state/gitwarden/quarantine/<time>/, then changes them,
           and writes undo.json there.
 restore() puts everything back from that backup.
 
@@ -21,7 +21,7 @@ from .clean import DELETE, EDIT, KEEP, MANUAL, clean
 from .detect import DANGER, Detector
 from .local import GIT_CONFIG_RULES, git
 
-COMMIT_MESSAGE = "Remove malware (RepoGuard)"
+COMMIT_MESSAGE = "Remove malware (GitWarden)"
 
 
 def quarantine_root():
@@ -36,7 +36,7 @@ def _identity(root):
     def get(k):
         p = git(root, "config", "--get", k)
         return p.stdout.decode().strip() if p.returncode == 0 else ""
-    return get("user.name") or "RepoGuard", get("user.email") or "repoguard@localhost"
+    return get("user.name") or "GitWarden", get("user.email") or "gitwarden@localhost"
 
 
 def plan(root, finding, det=None):
@@ -120,7 +120,7 @@ def apply(pl, delete_manual=(), commit_current=False, branches=()):
         if action == DELETE:
             os.remove(path)
         else:
-            tmp = path + ".repoguard-tmp"
+            tmp = path + ".gitwarden-tmp"
             with open(tmp, "wb") as fh:
                 fh.write(f["new"])
             os.chmod(tmp, stat.S_IMODE(f["mode"]))
@@ -142,7 +142,7 @@ def apply(pl, delete_manual=(), commit_current=False, branches=()):
         undo["git_config"] = {"path": cfg, "backup": backup}
         undo_write(qdir, undo)
 
-    name, email = _identity(root) if pl["is_repo"] else ("RepoGuard", "repoguard@localhost")
+    name, email = _identity(root) if pl["is_repo"] else ("GitWarden", "gitwarden@localhost")
     ident = {"GIT_AUTHOR_NAME": name, "GIT_AUTHOR_EMAIL": email, "GIT_COMMITTER_NAME": name,
              "GIT_COMMITTER_EMAIL": email}
 
@@ -232,7 +232,7 @@ def delete_backup(qdir):
     root = os.path.realpath(quarantine_root())
     real = os.path.realpath(qdir)
     if real == root or not real.startswith(root + os.sep) or not os.path.exists(os.path.join(real, "undo.json")):
-        raise ValueError(f"not a RepoGuard backup: {qdir}")
+        raise ValueError(f"not a GitWarden backup: {qdir}")
     shutil.rmtree(real)
 
 

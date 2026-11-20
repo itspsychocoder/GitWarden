@@ -54,7 +54,7 @@ class PCFixDialog(Adw.Dialog):
             row.add_row(detail)
             where = Adw.ActionRow(title="Where", subtitle=esc(f["where"]))
             row.add_row(where)
-            how = ACTION.get(fx.get("type")) or fx.get("how") or "Nothing RepoGuard can do automatically"
+            how = ACTION.get(fx.get("type")) or fx.get("how") or "Nothing GitWarden can do automatically"
             row.add_row(Adw.ActionRow(title="Fix", subtitle=esc(how)))
             if f["severity"] == "danger":
                 row.add_css_class("error")
@@ -86,7 +86,7 @@ class PCFixDialog(Adw.Dialog):
             except Exception as e:
                 res, err = None, repr(e)
             GLib.idle_add(self._done, res, err)
-        threading.Thread(target=work, daemon=True, name="repoguard-pc-fix").start()
+        threading.Thread(target=work, daemon=True, name="gitwarden-pc-fix").start()
 
     def _done(self, res, err):
         self.nav.pop()

@@ -1,7 +1,7 @@
 import os
 import unittest
 
-from repoguard.detect import DANGER, Detector
+from gitwarden.detect import DANGER, Detector
 from tests.helpers import LOADER, NPM_LOADER, PAD
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -51,7 +51,7 @@ class DetectTest(unittest.TestCase):
         self.assertNotIn("offscreen", rules(self.d.check("node_modules/x/a.js", ("a" + PAD + "b").encode())))
 
     def test_own_source_is_clean(self):
-        """RepoGuard must never flag itself (so its own git hook can't block its own pulls)."""
+        """GitWarden must never flag itself (so its own git hook can't block its own pulls)."""
         for dirpath, dirs, names in os.walk(ROOT):
             dirs[:] = [x for x in dirs if x not in (".git", "__pycache__")]
             for n in names:

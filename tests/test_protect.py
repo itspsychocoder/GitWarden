@@ -3,7 +3,7 @@ import os
 import subprocess
 import unittest
 
-from repoguard import protect
+from gitwarden import protect
 from tests.helpers import GIT_ENV, LOADER, PAD, infect, tmpdir, write
 
 
@@ -16,12 +16,12 @@ class ProtectTest(unittest.TestCase):
             fh.write("[user]\n\tname = t\n\temail = t@t\n[init]\n\tdefaultBranch = main\n"
                      "[protocol \"file\"]\n\tallow = always\n")
         self.env = {**GIT_ENV, "GIT_CONFIG_GLOBAL": self.gcfg,
-                    "REPOGUARD_HOOKS_DIR": os.path.join(self.root, "hooks"),
-                    "REPOGUARD_STATE": os.path.join(self.root, "state"), "PATH": "/usr/bin:/bin"}
-        self.env.pop("REPOGUARD_ALLOW_FETCH", None)
-        self._old = {k: os.environ.get(k) for k in ("GIT_CONFIG_GLOBAL", "REPOGUARD_HOOKS_DIR", "REPOGUARD_STATE")}
+                    "GITWARDEN_HOOKS_DIR": os.path.join(self.root, "hooks"),
+                    "GITWARDEN_STATE": os.path.join(self.root, "state"), "PATH": "/usr/bin:/bin"}
+        self.env.pop("GITWARDEN_ALLOW_FETCH", None)
+        self._old = {k: os.environ.get(k) for k in ("GIT_CONFIG_GLOBAL", "GITWARDEN_HOOKS_DIR", "GITWARDEN_STATE")}
         os.environ.update({k: self.env[k] for k in self._old})
-        os.makedirs(self.env["REPOGUARD_STATE"])
+        os.makedirs(self.env["GITWARDEN_STATE"])
         # a "GitHub" repo with one clean commit, a developer who pushes to it, and you
         self.origin = os.path.join(self.root, "origin.git")
         self.dev = os.path.join(self.root, "dev")
@@ -59,7 +59,7 @@ class ProtectTest(unittest.TestCase):
         self.assertTrue(ok)
         self.assertEqual(protect.status(), "on")
         for name in protect.ALL_HOOKS:
-            self.assertTrue(os.access(os.path.join(self.env["REPOGUARD_HOOKS_DIR"], name), os.X_OK), name)
+            self.assertTrue(os.access(os.path.join(self.env["GITWARDEN_HOOKS_DIR"], name), os.X_OK), name)
         protect.uninstall()
         self.assertEqual(protect.status(), "off")
 
@@ -107,7 +107,7 @@ class ProtectTest(unittest.TestCase):
         self.git(me, "pull", "-q", "--ff-only")
         self.assertTrue(os.path.exists(os.path.join(me, "b.js")))
         self.push_infected()
-        self.git(me, "pull", "-q", "--ff-only", extra={"REPOGUARD_ALLOW_FETCH": "1"})
+        self.git(me, "pull", "-q", "--ff-only", extra={"GITWARDEN_ALLOW_FETCH": "1"})
         self.assertTrue(os.path.exists(os.path.join(me, "init")), "override lets it through on purpose")
 
     def test_own_commits_are_not_checked(self):
@@ -131,7 +131,7 @@ class ProtectTest(unittest.TestCase):
         self.git(me, "add", "-A")
         self.git(me, "commit", "-qm", "with hook")
         self.assertTrue(os.path.exists(marker), "repo's own pre-commit hook ran")
-        # a failing repo hook still stops the commit, as it would without RepoGuard
+        # a failing repo hook still stops the commit, as it would without GitWarden
         with open(hook, "w") as fh:
             fh.write("#!/bin/sh\nexit 1\n")
         write(me, "d.js", "2;\n")

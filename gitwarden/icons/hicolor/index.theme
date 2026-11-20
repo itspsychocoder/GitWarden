@@ -1,6 +1,6 @@
 [Icon Theme]
-Name=RepoGuard
-Comment=RepoGuard's own icons
+Name=GitWarden
+Comment=GitWarden's own icons
 Directories=scalable/status,scalable/apps
 
 [scalable/status]

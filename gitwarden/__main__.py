@@ -1,7 +1,7 @@
-"""repoguard            open the app (top-bar icon + window)
-repoguard --background   start in the top bar only (used at login)
-repoguard check      one GitHub check in the terminal, prints a summary (no GUI)
-repoguard protect on|off|status   block git fetches, pulls and clones that bring malware"""
+"""gitwarden            open the app (top-bar icon + window)
+gitwarden --background   start in the top bar only (used at login)
+gitwarden check      one GitHub check in the terminal, prints a summary (no GUI)
+gitwarden protect on|off|status   block git fetches, pulls and clones that bring malware"""
 import json
 import sys
 
@@ -37,7 +37,7 @@ def protect_cmd(args):
     elif args == ["off"]:
         ok, msg = protect.uninstall()
     else:
-        print("usage: repoguard protect on [--force] | off | status", file=sys.stderr)
+        print("usage: gitwarden protect on [--force] | off | status", file=sys.stderr)
         return 2
     print(msg)
     return 0 if ok else 1
