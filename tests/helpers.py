@@ -7,7 +7,7 @@ import subprocess
 import tempfile
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 
 PAD = " " * 150
 LOADER = "var z = '-67" + "52-3';"
@@ -17,8 +17,8 @@ GIT_ENV = {**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM":
            "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
 
 
-def git(cwd, *args, data=None):
-    p = subprocess.run(["git", *args], cwd=cwd, input=data, capture_output=True, env=GIT_ENV)
+def git(cwd, *args, data=None, env=None):
+    p = subprocess.run(["git", *args], cwd=cwd, input=data, capture_output=True, env={**GIT_ENV, **(env or {})})
     if p.returncode:
         raise AssertionError(f"git {' '.join(args)}: {p.stderr.decode()}")
     return p.stdout
@@ -65,12 +65,18 @@ class FakeRemote:
         git(self.work, "push", "-q", "-f", "origin", branch)
 
 
+READ_TOKENS = {"test-token", "fix-token"}
+WRITE_TOKENS = {"fix-token"}
+
+
 class MockGitHub:
-    """Just enough of the GitHub REST API, served from FakeRemote bare repos."""
+    """Just enough of the GitHub REST API, served from FakeRemote bare repos.
+    test-token can only read (like the watch token); fix-token can also write."""
 
     def __init__(self):
         self.remotes = {}
         self.calls = []
+        self.protected = {}   # "owner/repo:branch" -> "ruleset" | "protection" | "allowed"
         mock = self
 
         class H(BaseHTTPRequestHandler):
@@ -88,12 +94,24 @@ class MockGitHub:
                 self.end_headers()
                 self.wfile.write(raw)
 
-            def do_GET(self):
+            def token(self):
+                return (self.headers.get("Authorization") or "").removeprefix("Bearer ")
+
+            def body(self):
+                n = int(self.headers.get("Content-Length") or 0)
+                return json.loads(self.rfile.read(n) or b"{}")
+
+            def route(self):
                 u = urlparse(self.path)
-                mock.calls.append(u.path)
-                if self.headers.get("Authorization") != "Bearer test-token":
+                mock.calls.append(f"{self.command} {u.path}")
+                parts = [unquote(x) for x in u.path.strip("/").split("/")]
+                r = mock.remotes.get(f"{parts[1]}/{parts[2]}") if parts[0] == "repos" and len(parts) > 3 else None
+                return u, parts, r
+
+            def do_GET(self):
+                u, parts, r = self.route()
+                if self.token() not in READ_TOKENS:
                     return self.send(401, {"message": "Bad credentials"})
-                parts = u.path.strip("/").split("/")
                 if u.path == "/user/repos":
                     etag = '"' + str(sorted(mock.remotes)) + '"'
                     if self.headers.get("If-None-Match") == etag:
@@ -104,15 +122,29 @@ class MockGitHub:
                     return self.send(200, [{"full_name": n, "default_branch": "main", "private": True,
                                             "permissions": {"push": True}, "archived": False}
                                            for n in sorted(mock.remotes)], {"ETag": etag})
-                if parts[0] != "repos" or len(parts) < 4:
-                    return self.send(404, {"message": "Not Found"})
-                r = mock.remotes.get(f"{parts[1]}/{parts[2]}")
                 if not r:
                     return self.send(404, {"message": "Not Found"})
-                if parts[3] == "branches":
+                key = lambda b: f"{r.full_name}:{b}"  # noqa: E731
+                if parts[3] == "branches" and len(parts) == 4:
                     out = git(r.bare, "for-each-ref", "--format=%(refname:short) %(objectname)", "refs/heads").decode()
                     return self.send(200, [{"name": n, "commit": {"sha": s}}
                                            for n, s in (l.split() for l in out.splitlines())])
+                if parts[3] == "branches":
+                    tail = parts[4:]
+                    want_protection = tail[-1] == "protection" and len(tail) > 1
+                    branch = "/".join(tail[:-1] if want_protection else tail)
+                    p = mock.protected.get(key(branch))
+                    if want_protection:
+                        if not p:
+                            return self.send(404, {"message": "Branch not protected"})
+                        return self.send(200, {"allow_force_pushes": {"enabled": p == "allowed"}})
+                    sha = git(r.bare, "rev-parse", "refs/heads/" + branch).decode().strip()
+                    return self.send(200, {"name": branch, "commit": {"sha": sha},
+                                           "protected": p in ("protection", "allowed")})
+                if parts[3:5] == ["rules", "branches"]:
+                    branch = "/".join(parts[5:])
+                    rules = [{"type": "non_fast_forward"}] if mock.protected.get(key(branch)) == "ruleset" else []
+                    return self.send(200, rules)
                 if parts[3:5] == ["git", "trees"]:
                     out = git(r.bare, "ls-tree", "-r", "-l", parts[5]).decode()
                     tree = []
@@ -124,6 +156,59 @@ class MockGitHub:
                 if parts[3:5] == ["git", "blobs"]:
                     data = git(r.bare, "cat-file", "blob", parts[5])
                     return self.send(200, {"content": base64.b64encode(data).decode(), "encoding": "base64"})
+                if parts[3:5] == ["git", "commits"]:
+                    tree = git(r.bare, "rev-parse", parts[5] + "^{tree}").decode().strip()
+                    return self.send(200, {"sha": parts[5], "tree": {"sha": tree}})
+                return self.send(404, {"message": "Not Found"})
+
+            def write_ok(self):
+                if self.token() in WRITE_TOKENS:
+                    return True
+                code = 401 if self.token() not in READ_TOKENS else 403
+                self.send(code, {"message": "Resource not accessible by personal access token"})
+                return False
+
+            def do_POST(self):
+                u, parts, r = self.route()
+                if not self.write_ok():
+                    return
+                if not r:
+                    return self.send(404, {"message": "Not Found"})
+                b = self.body()
+                if parts[3:5] == ["git", "blobs"]:
+                    sha = git(r.bare, "hash-object", "-w", "--stdin", data=base64.b64decode(b["content"])).decode().strip()
+                    return self.send(201, {"sha": sha})
+                if parts[3:5] == ["git", "trees"]:
+                    idx = r.bare + ".index"
+                    env = {"GIT_INDEX_FILE": idx}
+                    git(r.bare, "read-tree", b["base_tree"], env=env)
+                    info = "".join(f"0 {'0' * 40}\t{e['path']}\n" if e["sha"] is None
+                                   else f"{e['mode']} {e['sha']}\t{e['path']}\n" for e in b["tree"])
+                    git(r.bare, "update-index", "--index-info", data=info.encode(), env=env)
+                    sha = git(r.bare, "write-tree", env=env).decode().strip()
+                    os.remove(idx)
+                    return self.send(201, {"sha": sha})
+                if parts[3:5] == ["git", "commits"]:
+                    args = ["commit-tree", b["tree"]]
+                    for p in b["parents"]:
+                        args += ["-p", p]
+                    sha = git(r.bare, *args, "-F", "-", data=b["message"].encode()).decode().strip()
+                    return self.send(201, {"sha": sha})
+                return self.send(404, {"message": "Not Found"})
+
+            def do_PATCH(self):
+                u, parts, r = self.route()
+                if not self.write_ok():
+                    return
+                b = self.body()
+                if r and parts[3:6] == ["git", "refs", "heads"]:
+                    ref = "refs/heads/" + "/".join(parts[6:])
+                    old = git(r.bare, "rev-parse", ref).decode().strip()
+                    ff = subprocess.run(["git", "-C", r.bare, "merge-base", "--is-ancestor", old, b["sha"]], env=GIT_ENV)
+                    if ff.returncode and not b.get("force"):
+                        return self.send(422, {"message": "Update is not a fast forward"})
+                    git(r.bare, "update-ref", ref, b["sha"], old)
+                    return self.send(200, {"ref": ref, "object": {"sha": b["sha"]}})
                 return self.send(404, {"message": "Not Found"})
 
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), H)
@@ -139,6 +224,7 @@ class MockGitHub:
 
     def close(self):
         self.server.shutdown()
+        self.server.server_close()
 
 
 def tmpdir():

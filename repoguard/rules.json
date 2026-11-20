@@ -32,7 +32,7 @@
     {"id": "gitignore_marker", "severity": "danger", "scope": "gitignore", "label": "Malware marker in .gitignore",
      "pattern": "^(?:config\\.bat|temp_auto_push\\.bat|temp_interactive_push\\.bat|branch_structure\\.json)\\s*$"},
     {"id": "npm_loader", "severity": "danger", "scope": "package_json", "label": "npm script runs a hidden loader",
-     "pattern": "\"[\\w:.-]+\"\\s*:\\s*\"node\\s+(?:\\./)?init\\b"},
+     "pattern": "\"[\\w:.-]+\"\\s*:\\s*\"(?:[^\"]*(?:&&|;)\\s*)?node\\s+(?:\\./)?init\\b"},
     {"id": "install_script", "severity": "review", "scope": "package_json", "label": "Package install script",
      "pattern": "\"(?:preinstall|install|postinstall|prepare)\"\\s*:\\s*\""},
     {"id": "offscreen", "severity": "danger", "scope": "code", "label": "Code hidden far off-screen",

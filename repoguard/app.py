@@ -300,6 +300,10 @@ class Window(Adw.ApplicationWindow):
             exp.add_prefix(Gtk.Image.new_from_icon_name("dialog-warning-symbolic" if danger else "dialog-question-symbolic"))
             if danger:
                 exp.add_css_class("error")
+                fb = Gtk.Button(label="Fix…", valign=Gtk.Align.CENTER, tooltip_text="Remove the malware on GitHub")
+                fb.add_css_class("suggested-action")
+                fb.connect("clicked", lambda *_, k=key: self.open_fix(k))
+                exp.add_suffix(fb)
             btn = Gtk.Button(icon_name="web-browser-symbolic", tooltip_text="Open branch on GitHub", valign=Gtk.Align.CENTER)
             btn.add_css_class("flat")
             btn.connect("clicked", lambda *_, k=key: open_url(github.branch_url(k)))
@@ -332,6 +336,13 @@ class Window(Adw.ApplicationWindow):
                                    subtitle="private" if r.get("private") else "public")
                 exp.add_row(rr)
             rg.add(exp)
+
+    def open_fix(self, key):
+        from .fixdialog import FixDialog
+        repo, branch = key.split(":", 1)
+        infected = [k.split(":", 1)[1] for k, files in self.ctl.state["findings"].items()
+                    if k.split(":", 1)[0] == repo and any(f["severity"] == "danger" for f in files)]
+        FixDialog(self.ctl, repo, infected, preselect=branch).present(self)
 
     def _group(self, title, desc=None):
         g = Adw.PreferencesGroup(title=title or "", description=desc or "")
