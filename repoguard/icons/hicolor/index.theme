@@ -1,0 +1,18 @@
+[Icon Theme]
+Name=RepoGuard
+Comment=RepoGuard's own icons
+Directories=scalable/status,scalable/apps
+
+[scalable/status]
+Size=16
+MinSize=8
+MaxSize=512
+Type=Scalable
+Context=Status
+
+[scalable/apps]
+Size=128
+MinSize=8
+MaxSize=512
+Type=Scalable
+Context=Applications

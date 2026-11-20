@@ -70,6 +70,21 @@ commit changed. File verdicts are cached by blob SHA, so only files that actuall
 Large first scans are spread over several checks (max 1,500 files per check, and it stops if your API
 rate limit gets low).
 
+## Blocking infected pulls
+
+Settings → **Block infected pulls and clones** (or `repoguard protect on`). RepoGuard sets git's global
+`core.hooksPath` to `~/.local/share/repoguard/githooks`. Its `reference-transaction` hook reads the objects a
+fetch, pull or clone just downloaded (only the new ones) and cancels the update if any file is malware, so
+your branches and files never change. It works for every git app: terminal, VS Code, GitHub Desktop.
+
+- Every other hook passes through to the repo's own `.git/hooks`, so Git LFS, pre-commit etc. keep working.
+- Your own commits aren't checked.
+- Let one command through on purpose (e.g. to clone an infected repo to clean it):
+  `REPOGUARD_ALLOW_FETCH=1 git clone …`
+- Not covered: repos that set their own `core.hooksPath` (husky), and `git fetch origin x:y` straight into a
+  local branch.
+- `repoguard protect off` puts git back as it was.
+
 ## Fixing malware on GitHub
 
 Press **Fix…** on an infected branch, pick how, paste the fix token, and preview every change before anything
@@ -98,7 +113,7 @@ python3 -m unittest discover -s tests -t . -v
 
 - [x] Detection engine, GitHub watch, alerts, top-bar icon, window
 - [ ] Review & remove malware in local clones (preview, backup)
-- [ ] Git hook that blocks pulls/fetches/clones bringing malware
+- [x] Git hook that blocks pulls/fetches/clones bringing malware
 - [ ] Linux PC check: crontab, systemd user units, autostart, shell rc files, ~/.ssh/authorized_keys, /tmp
 - [x] Fix on GitHub: one cleanup commit
 - [x] Rewrite history on GitHub (force-push) with mirror backup and typed confirmation

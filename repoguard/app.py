@@ -17,7 +17,7 @@ try:
 except (ValueError, ImportError):
     Notify = None
 
-from . import autostart, config, github  # noqa: E402
+from . import autostart, config, github, protect  # noqa: E402
 from .tray import Tray  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -65,11 +65,13 @@ class Controller:
 
     # ---------------------------------------------------------------- lifecycle
     def start(self):
-        if Tray.available():
-            self.tray = Tray(config.APP_ID, config.APP_NAME, ICON_DIR, on_activate=self.app.show_window)
-        else:
-            print("RepoGuard: no top-bar icon host found (enable the 'Ubuntu AppIndicators' or "
-                  "'AppIndicator and KStatusNotifierItem Support' GNOME extension).", file=sys.stderr)
+        # The icon shows up whenever a top-bar host is (or later becomes) available.
+        self.tray = Tray(config.APP_ID, config.APP_NAME, ICON_DIR, on_activate=self.app.show_window)
+        self.tray.on_host_change = lambda up: (self.refresh(), self.app.host_changed(up))
+        if not Tray.available():
+            print("RepoGuard: no top-bar icon host right now (enable the 'Ubuntu AppIndicators' or "
+                  "'AppIndicator and KStatusNotifierItem Support' GNOME extension); the icon appears "
+                  "as soon as it is on.", file=sys.stderr)
         if Notify:
             Notify.init(config.APP_NAME)
         token, why = config.github_token()
@@ -233,7 +235,8 @@ class Window(Adw.ApplicationWindow):
     def __init__(self, app, ctl):
         super().__init__(application=app, title=config.APP_NAME, default_width=760, default_height=640)
         self.ctl = ctl
-        self.set_hide_on_close(ctl.tray is not None)
+        # With a top-bar icon, closing the window keeps RepoGuard running there; without one, it quits.
+        self.connect("close-request", self._on_close)
 
         self.stack = Adw.ViewStack()
         header = Adw.HeaderBar()
@@ -257,6 +260,13 @@ class Window(Adw.ApplicationWindow):
         self.set_content(view)
         ctl.listeners.append(self.update)
         self.update()
+
+    def _on_close(self, *_):
+        if self.ctl.tray and self.ctl.tray.host:
+            self.set_visible(False)
+            return True
+        self.get_application().quit()
+        return False
 
     def toast(self, msg):
         self.toasts.add_toast(Adw.Toast(title=msg, timeout=4))
@@ -285,6 +295,11 @@ class Window(Adw.ApplicationWindow):
         repos = ctl.state.get("repos", [])
         g.add(Adw.ActionRow(title="Last check", subtitle=f"{ago(ctl.state.get('last_check'))} · "
                             f"{len(repos)} repos you can push to · every {ctl.settings['interval_minutes']} min"))
+        ps = protect.status()
+        g.add(Adw.ActionRow(
+            title="Git protection: " + {"on": "on", "other": "off (another hooks folder is set)"}.get(ps, "off"),
+            subtitle=("Fetches, pulls and clones that bring malware are cancelled before your files change."
+                      if ps == "on" else "Turn it on in Settings to block infected pulls and clones.")))
 
         if ctl.token_problem:
             self._token_group(self._group("Connect GitHub",
@@ -420,6 +435,16 @@ class Window(Adw.ApplicationWindow):
         g.add(auto)
         self.settings_page.add(g)
 
+        pg = Adw.PreferencesGroup(
+            title="Git protection",
+            description="Checks what git fetch, pull and clone bring in, before your files change, in the terminal, "
+                        "VS Code and any other git app. Your own commits aren't checked. To let one command through "
+                        "on purpose: REPOGUARD_ALLOW_FETCH=1 git …")
+        self.protect_row = Adw.SwitchRow(title="Block infected pulls and clones", active=protect.status() == "on")
+        self.protect_row.connect("notify::active", self._on_protect)
+        pg.add(self.protect_row)
+        self.settings_page.add(pg)
+
         gg = Adw.PreferencesGroup(title="GitHub access")
         self.conn_row = Adw.ActionRow()
         gg.add(self.conn_row)
@@ -433,6 +458,36 @@ class Window(Adw.ApplicationWindow):
         fg.add(forget)
         self.settings_page.add(fg)
         self._update_conn()
+
+    def _on_protect(self, row, _):
+        want = row.get_active()
+        if want == (protect.status() == "on"):
+            return
+        if not want:
+            ok, msg = protect.uninstall()
+        else:
+            ok, msg = protect.install()
+            if not ok and protect.status() == "other":
+                d = Adw.AlertDialog(heading="Replace git's hooks folder?",
+                                    body=GLib.markup_escape_text(msg) + "\n\nRepoGuard runs each repo's own hooks, "
+                                    "but hooks from that folder would stop running.")
+                d.add_response("cancel", "Cancel")
+                d.add_response("replace", "Replace")
+                d.set_response_appearance("replace", Adw.ResponseAppearance.DESTRUCTIVE)
+                d.set_close_response("cancel")
+
+                def done(_d, response):
+                    if response == "replace":
+                        _ok, m = protect.install(force=True)
+                        self.toast(m)
+                    row.set_active(protect.status() == "on")
+                    self.ctl.refresh()
+                d.connect("response", done)
+                d.present(self)
+                return
+        self.toast(msg)
+        row.set_active(protect.status() == "on")
+        self.ctl.refresh()
 
     def _update_conn(self):
         token, src = config.github_token()
@@ -470,14 +525,19 @@ class App(Adw.Application):
         Adw.Application.do_startup(self)
         Gtk.IconTheme.get_for_display(Gdk.Display.get_default()).add_search_path(ICON_DIR)
         self.hold()  # keep running in the top bar with no window open
+        protect.refresh()  # keep the git hooks pointing at this copy of RepoGuard
         self.ctl = Controller(self)
         self.ctl.start()
 
     def do_command_line(self, cmd):
         args = cmd.get_arguments()[1:]
-        if "--background" not in args or self.ctl.tray is None:
+        if "--background" not in args or not Tray.available():
             self.show_window()
         return 0
+
+    def host_changed(self, up):
+        if not up and (self.win is None or not self.win.get_visible()):
+            self.show_window()  # the icon went away: show the window so RepoGuard isn't invisible
 
     def show_window(self):
         if self.win is None:

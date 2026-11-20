@@ -1,6 +1,7 @@
 """repoguard            open the app (top-bar icon + window)
 repoguard --background   start in the top bar only (used at login)
-repoguard check      one GitHub check in the terminal, prints a summary (no GUI)"""
+repoguard check      one GitHub check in the terminal, prints a summary (no GUI)
+repoguard protect on|off|status   block git fetches, pulls and clones that bring malware"""
 import json
 import sys
 
@@ -26,10 +27,28 @@ def check():
     return 1 if any(f["severity"] == "danger" for v in bad.values() for f in v) else 0
 
 
+def protect_cmd(args):
+    from . import protect
+    if args == ["status"]:
+        print(protect.status())
+        return 0
+    if args in (["on"], ["on", "--force"]):
+        ok, msg = protect.install(force="--force" in args)
+    elif args == ["off"]:
+        ok, msg = protect.uninstall()
+    else:
+        print("usage: repoguard protect on [--force] | off | status", file=sys.stderr)
+        return 2
+    print(msg)
+    return 0 if ok else 1
+
+
 def main():
     args = sys.argv[1:]
     if args[:1] == ["check"]:
         return check()
+    if args[:1] == ["protect"]:
+        return protect_cmd(args[1:])
     if args[:1] in (["-h"], ["--help"]):
         print(__doc__)
         return 0

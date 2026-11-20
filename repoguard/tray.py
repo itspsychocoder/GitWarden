@@ -91,9 +91,22 @@ class Tray:
         self.bus.register_object(ITEM_PATH, sni, self._sni_call, self._sni_get, None)
         self.bus.register_object(MENU_PATH, menu, self._menu_call, self._menu_get, None)
         Gio.bus_own_name_on_connection(self.bus, self.bus_name, Gio.BusNameOwnerFlags.NONE, None, None)
-        self._watch = Gio.bus_watch_name_on_connection(
-            self.bus, "org.kde.StatusNotifierWatcher", Gio.BusNameWatcherFlags.NONE, self._register, None)
         self.registered = False
+        self.on_host_change = None  # called with True/False when the top-bar host appears or goes away
+        # Registers now if the host is there, and again whenever it (re)appears: e.g. the AppIndicator
+        # extension being turned back on, or GNOME Shell restarting.
+        self._watch = Gio.bus_watch_name_on_connection(
+            self.bus, "org.kde.StatusNotifierWatcher", Gio.BusNameWatcherFlags.NONE, self._register, self._vanished)
+
+    @property
+    def host(self):
+        return self.registered
+
+    def _vanished(self, *_):
+        if self.registered:
+            self.registered = False
+            if self.on_host_change:
+                self.on_host_change(False)
 
     # ---------------------------------------------------------------- registration
     def _register(self, *_):
@@ -101,6 +114,8 @@ class Tray:
             try:
                 bus.call_finish(res)
                 self.registered = True
+                if self.on_host_change:
+                    self.on_host_change(True)
             except GLib.Error as e:
                 print("RepoGuard: could not add the top-bar icon:", e.message)
         self.bus.call("org.kde.StatusNotifierWatcher", "/StatusNotifierWatcher", "org.kde.StatusNotifierWatcher",
