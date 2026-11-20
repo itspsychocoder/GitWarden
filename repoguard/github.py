@@ -22,6 +22,7 @@ MIN_RATE_LEFT = 200       # stop early to leave API headroom for you and other t
 MAX_CACHE = 300_000
 TARBALL_MIN_FILES = 15        # this many uncached files in a branch: download one archive instead of each file
 TARBALL_MAX_BYTES = 300_000_000
+FULL_SWEEP_SECONDS = 6 * 3600  # look at every repo's branches at least this often, even if GitHub says no push
 
 
 class GitHubError(Exception):
@@ -221,10 +222,12 @@ class Watcher:
         """Repos you can push to (not archived). Uses an ETag so an unchanged list costs no rate limit."""
         status, items, etag = self.gh.pages(
             "/user/repos?per_page=100&affiliation=owner,collaborator,organization_member&sort=pushed",
-            etag=self.state["repos_etag"] if self.state["repos"] else None)
+            etag=self.state["repos_etag"] if self.state["repos"] and all("pushed_at" in r for r in self.state["repos"])
+            else None)
         if status != 304:
             self.state["repos"] = [{"full_name": r["full_name"], "default_branch": r.get("default_branch"),
-                                    "private": r.get("private", False), "html_url": r.get("html_url")}
+                                    "private": r.get("private", False), "html_url": r.get("html_url"),
+                                    "pushed_at": r.get("pushed_at")}
                                    for r in items if (r.get("permissions") or {}).get("push") and not r.get("archived")]
             self.state["repos_etag"] = etag
         return self.state["repos"]
@@ -275,20 +278,41 @@ class Watcher:
         return files, bool(tree.get("truncated"))
 
     def run(self):
-        """One full check. Returns a summary dict; state is updated in place (caller saves it)."""
+        """One check. Returns a summary dict; state is updated in place (caller saves it).
+
+        Cheap when nothing changed: a repo whose `pushed_at` is the same as when all its branches were last checked
+        is skipped, and branch lists are fetched with an ETag (a 304 "not modified" doesn't count against the API
+        rate limit). Every FULL_SWEEP_SECONDS all branch lists are fetched anyway (still with ETags)."""
         st = self.state
+        checked = st.setdefault("repo_pushed", {})    # repo -> pushed_at when all its branches were last checked
+        etags = st.setdefault("branch_etags", {})     # repo -> ETag of its branch list
         before = finding_ids(st["findings"])
         repos = self.repos()
-        live, incomplete, errors, scanned = set(), False, [], 0
+        full = time.time() - st.get("last_full_sweep", 0) >= FULL_SWEEP_SECONDS
+        live, incomplete, errors, scanned, skipped = set(), False, [], 0, 0
+        known = {}
+        for k in st["heads"]:
+            known.setdefault(k.split(":", 1)[0], []).append(k)
         for i, r in enumerate(repos):
-            name = r["full_name"]
+            name, pushed = r["full_name"], r.get("pushed_at")
+            if not full and pushed and checked.get(name) == pushed:
+                live.update(known.get(name, []))
+                skipped += 1
+                continue
             self.progress(f"Checking {name} ({i + 1}/{len(repos)})")
             try:
-                _, branches, _ = self.gh.pages(f"/repos/{name}/branches?per_page=100")
+                status, branches, etag = self.gh.pages(f"/repos/{name}/branches?per_page=100",
+                                                       etag=etags.get(name) if checked.get(name) else None)
             except GitHubError as e:
                 if e.status in (404, 409):  # empty repo or gone
+                    checked[name] = pushed
                     continue
                 raise
+            if status == 304:  # branch list unchanged since everything in it was checked
+                live.update(known.get(name, []))
+                checked[name] = pushed
+                continue
+            repo_ok = True
             for b in branches:
                 key = f"{name}:{b['name']}"
                 live.add(key)
@@ -304,6 +328,7 @@ class Watcher:
                     if e.status == 0:
                         raise
                     errors.append(f"{key}: {e}")
+                    repo_ok = False
                     continue
                 scanned += 1
                 if truncated:
@@ -313,19 +338,31 @@ class Watcher:
                 else:
                     st["findings"].pop(key, None)
                 st["heads"][key] = sha
+            if repo_ok and not incomplete:  # only now is it safe to skip this repo next time
+                checked[name], etags[name] = pushed, etag
+            else:
+                checked.pop(name, None)
+                etags.pop(name, None)
             self.checkpoint()
             if incomplete:
                 break
-        if not incomplete:  # forget branches that were deleted
-            for key in list(st["heads"]):
+        if not incomplete:
+            for key in list(st["heads"]):  # forget branches (and repos) that are gone
                 if key not in live:
                     st["heads"].pop(key, None)
                     st["findings"].pop(key, None)
+            names = {r["full_name"] for r in repos}
+            for d in (checked, etags):
+                for n in list(d):
+                    if n not in names:
+                        d.pop(n)
+            if full:
+                st["last_full_sweep"] = time.time()
         st["last_check"] = time.time()
         st["last_error"] = None
         new = sorted(finding_ids(st["findings"]) - before)
-        return {"repos": len(repos), "branches_scanned": scanned, "incomplete": incomplete, "errors": errors,
-                "new": new, "api_calls": self.gh.calls, "rate_remaining": self.gh.remaining,
+        return {"repos": len(repos), "skipped": skipped, "branches_scanned": scanned, "incomplete": incomplete,
+                "errors": errors, "new": new, "api_calls": self.gh.calls, "rate_remaining": self.gh.remaining,
                 "archives": self.archives}
 
 

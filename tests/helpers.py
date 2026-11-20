@@ -78,6 +78,7 @@ class MockGitHub:
         self.calls = []
         self.protected = {}   # "owner/repo:branch" -> "ruleset" | "protection" | "allowed"
         self.codeload_auth = []  # Authorization headers seen by the download server (must stay empty)
+        self.not_modified = 0
         mock = self
 
         class H(BaseHTTPRequestHandler):
@@ -124,22 +125,30 @@ class MockGitHub:
                 if self.token() not in READ_TOKENS:
                     return self.send(401, {"message": "Bad credentials"})
                 if u.path == "/user/repos":
-                    etag = '"' + str(sorted(mock.remotes)) + '"'
+                    listing = [(n, mock.pushed_at(n)) for n in sorted(mock.remotes)]
+                    etag = '"' + str(abs(hash(str(listing)))) + '"'
                     if self.headers.get("If-None-Match") == etag:
                         self.send_response(304)
                         self.send_header("Content-Length", "0")
                         self.end_headers()
                         return
                     return self.send(200, [{"full_name": n, "default_branch": "main", "private": True,
-                                            "permissions": {"push": True}, "archived": False}
-                                           for n in sorted(mock.remotes)], {"ETag": etag})
+                                            "permissions": {"push": True}, "archived": False, "pushed_at": p}
+                                           for n, p in listing], {"ETag": etag})
                 if not r:
                     return self.send(404, {"message": "Not Found"})
                 key = lambda b: f"{r.full_name}:{b}"  # noqa: E731
                 if parts[3] == "branches" and len(parts) == 4:
                     out = git(r.bare, "for-each-ref", "--format=%(refname:short) %(objectname)", "refs/heads").decode()
+                    etag = '"' + str(abs(hash(out))) + '"'
+                    if self.headers.get("If-None-Match") == etag:
+                        mock.not_modified += 1
+                        self.send_response(304)
+                        self.send_header("Content-Length", "0")
+                        self.end_headers()
+                        return
                     return self.send(200, [{"name": n, "commit": {"sha": s}}
-                                           for n, s in (l.split() for l in out.splitlines())])
+                                           for n, s in (l.split() for l in out.splitlines())], {"ETag": etag})
                 if parts[3] == "branches":
                     tail = parts[4:]
                     want_protection = tail[-1] == "protection" and len(tail) > 1
@@ -231,6 +240,13 @@ class MockGitHub:
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), H)
         self.url = f"http://127.0.0.1:{self.server.server_address[1]}"
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
+
+    def pushed_at(self, name):
+        """Like GitHub's pushed_at: changes whenever any branch or tag moves."""
+        return str(abs(hash(git(self.remotes[name].bare, "for-each-ref").decode())))
+
+    def branch_list_calls(self):
+        return sum(1 for c in self.calls if c.startswith("GET ") and c.endswith("/branches"))
 
     def add(self, root, full_name):
         self.remotes[full_name] = FakeRemote(root, full_name)

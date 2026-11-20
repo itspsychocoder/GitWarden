@@ -98,6 +98,49 @@ class WatchTest(unittest.TestCase):
                        checkpoint=lambda: calls.append(1)).run()
         self.assertEqual(len(calls), 2)
 
+    def test_quiet_checks_skip_unchanged_repos(self):
+        a = self.mock.add(self.root, "me/a")
+        self.mock.add(self.root, "me/b")
+        state = github.load_state()
+        self.run_check(state)
+        self.assertEqual(self.mock.branch_list_calls(), 2)
+
+        calls_before = len(self.mock.calls)
+        res = self.run_check(state)  # nothing pushed: only the repo list is asked for
+        self.assertEqual(self.mock.branch_list_calls(), 2)
+        self.assertEqual(res["skipped"], 2)
+        self.assertEqual(len(self.mock.calls) - calls_before, 1)
+        self.assertEqual(len(state["heads"]), 2, "skipped repos keep their branches")
+
+        infect(a.work)
+        a.commit("forged", branch="evil")  # a push to repo a only
+        res = self.run_check(state)
+        self.assertEqual(self.mock.branch_list_calls(), 3)
+        self.assertIn("me/a:evil", state["findings"])
+
+    def test_full_sweep_uses_free_not_modified_answers(self):
+        self.mock.add(self.root, "me/a")
+        state = github.load_state()
+        self.run_check(state)
+        state["last_full_sweep"] = 0  # pretend 6 hours passed
+        self.run_check(state)
+        self.assertEqual(self.mock.not_modified, 1)
+        self.assertGreater(state["last_full_sweep"], 0)
+
+    def test_failed_branch_is_retried_next_time(self):
+        a = self.mock.add(self.root, "me/a")
+        state = github.load_state()
+        real = github.Watcher.scan_branch
+        github.Watcher.scan_branch = lambda *a, **k: (_ for _ in ()).throw(github.GitHubError(500, "boom"))
+        try:
+            res = self.run_check(state)
+        finally:
+            github.Watcher.scan_branch = real
+        self.assertTrue(res["errors"])
+        self.assertNotIn("me/a", state["repo_pushed"])
+        self.run_check(state)
+        self.assertIn("me/a:main", state["heads"])
+
     def test_review_notes_are_not_alerts(self):
         findings = {"me/a:main": [{"path": ".github/workflows/ci.yml", "blob": "b1", "severity": "review",
                                    "hits": [["autorun_location", "review", "File that can run code automatically"]]},
